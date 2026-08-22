@@ -19,6 +19,7 @@ from . import synthesis as syn
 from .drift import drift_row, DEFAULT_HETZNER_CHECKOUTS
 from .report import render_report, write_report, render_synthesis, render_anomalies
 from . import anomalies as ano
+from . import recommendations as recs
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,7 +46,44 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--var-dir", required=True, type=Path)
     d.add_argument("--out", type=Path, default=Path("var"))
     d.add_argument("--dry-run", action="store_true")
+    rr = sub.add_parser("recommend", help="advisory operator recommendations from the anomaly ledger")
+    rr.add_argument("--var-dir", required=True, type=Path)
+    rr.add_argument("--out", type=Path, default=Path("var"))
+    rr.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.command == "harvest":
+        return _harvest(args)
+    if args.command == "synthesize":
+        return _synthesize(args)
+    if args.command == "detect":
+        return _detect(args)
+    if args.command == "recommend":
+        return _recommend(args)
+    return 2
+
+
+def _recommend(args) -> int:
+    batch = recs.read_latest_anomaly_batch(args.var_dir)
+    if batch is None:
+        print(f"no anomaly batches under {args.var_dir / 'anomalies'}", file=sys.stderr)
+        return 6
+    recs_list = recs.derive_recommendations(batch)
+    payload = recs.build_batch(args.out, batch, recs_list)
+    if args.dry_run:
+        print(render_recommendations(payload))
+        print("--- recommendations payload ---")
+        print(json.dumps(payload, sort_keys=True, indent=2, default=str))
+    else:
+        target = recs.append_batch(args.out, payload)
+        rep_dir = args.out / "reports"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        report = rep_dir / f"recommendations-{payload['generated_from'].replace(':', '').replace('+0000', 'Z')}.md"
+        report.write_text(render_recommendations(payload))
+        print(f"recommendations: {target}")
+        print(f"report:          {report}")
+        print(f"active={payload['active_count']} closed={payload['closed_count']}")
+    return 0
 
     if args.command == "harvest":
         return _harvest(args)

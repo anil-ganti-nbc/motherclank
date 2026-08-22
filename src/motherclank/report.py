@@ -155,3 +155,37 @@ def render_anomalies(batch: dict[str, Any]) -> str:
         "",
     ]
     return chr(10).join(lines)
+
+
+def render_recommendations(batch: dict[str, Any]) -> str:
+    lines = [
+        "# Motherclank operator recommendations (ADVISORY — M3, deterministic)",
+        "",
+        f"- Generated from observations through: {batch.get('generated_from', _UNKNOWN)}",
+        f"- Rules: {batch.get('rules_version', _UNKNOWN)} · "
+        f"anomaly batch: {str(batch.get('anomaly_batch_hash'))[:20]}",
+        f"- Active: {batch.get('active_count', 0)} · Closed: {batch.get('closed_count', 0)}",
+        f"- Previous batch: {batch.get('previous_batch_hash') or 'none (first)'}",
+        f"- Batch hash: {batch.get('batch_hash', _UNKNOWN)}",
+        "",
+        "_Recommendations are advisory text derived from the anomaly ledger.",
+        "The operator owns every decision; Motherclank executes nothing._",
+        "",
+        "| Status | Priority | Category | Clank | Recommendation | Cited anomalies (latest evidence) |",
+        "|---|---|---|---|---|---|",
+    ]
+    order = {"P1": 0, "P2": 1, "P3": 2}
+    for r0 in sorted(batch.get("recommendations", []),
+                     key=lambda x: (x["status"], order.get(x["priority"], 3),
+                                    x["clank_id"])):
+        cites = "; ".join(
+            f"{c['type']}[{c['lifecycle']}] {c['latest_evidence'][:48]}"
+            for c in (r0["cited_anomalies"] + r0["resolved_citations"])[:3]
+        )
+        lines.append(
+            f"| {r0['status']} | {r0['priority']} | {r0['category']} "
+            f"| {r0['clank_id']} | {r0['title'][:70]} | {cites[:110]} |"
+        )
+        lines.append(f"|  |  |  |  | ↳ *{r0['recommended_action'][:120]}* |  |")
+    lines.append("")
+    return chr(10).join(lines)

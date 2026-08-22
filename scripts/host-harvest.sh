@@ -21,3 +21,6 @@ cd "$HOME_DIR"
 
 # M2: deterministic anomaly ledger over accumulated history
 .venv/bin/motherclank detect --var-dir var --out var
+
+# M3: advisory operator recommendations from the anomaly ledger
+.venv/bin/motherclank recommend --var-dir var --out var
