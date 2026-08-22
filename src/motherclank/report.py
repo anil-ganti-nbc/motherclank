@@ -70,7 +70,7 @@ def render_report(payload: dict[str, Any]) -> str:
     lines.append("_All values are as observed by read-only adapters; UNKNOWN means the")
     lines.append("underlying system does not evidence it. Clank databases remain authoritative._")
     lines.append("")
-    return "\n".join(lines)
+    return chr(10).join(lines)
 
 
 def write_report(out_dir: Path, payload: dict[str, Any]) -> Path:
@@ -79,3 +79,46 @@ def write_report(out_dir: Path, payload: dict[str, Any]) -> Path:
     target = rep_dir / f"fleet-{payload['harvested_at_utc'].replace(':', '').replace('+0000', 'Z')}.md"
     target.write_text(render_report(payload))
     return target
+
+
+def render_synthesis(synth: dict[str, Any]) -> str:
+    lines = [
+        "# Motherclank fleet synthesis (DERIVED — M1)",
+        "",
+        f"- Synthesized: {synth.get('synthesized_at_utc', _UNKNOWN)}",
+        f"- From snapshot: {synth.get('snapshot_hash', _UNKNOWN)} "
+        f"(harvested {synth.get('snapshot_harvested_at', _UNKNOWN)})",
+        f"- Fleet state: **{synth.get('fleet_state', _UNKNOWN)}** "
+        f"(confidence: {synth.get('fleet_confidence', _UNKNOWN)})",
+        f"- State counts: {_fmt(synth.get('state_counts'))}",
+        f"- Previous synthesis: {synth.get('previous_synthesis_hash') or 'none (first)'}",
+        f"- Synthesis hash: {synth.get('content_hash', _UNKNOWN)}",
+        "",
+        "| Clank | Derived state | Rules | Evidence (verbatim from snapshot) |",
+        "|---|---|---|---|",
+    ]
+    for cid in sorted(synth.get("clanks", {})):
+        c = synth["clanks"][cid]
+        lines.append(
+            f"| {cid} | {c['state']} | {', '.join(c['rules_applied']) or '-'} "
+            f"| {'; '.join(c['evidence_fields']) or '-'} |"
+        )
+    lines += ["", "## Law 9 deployment-drift indicator", ""]
+    drift = synth.get("law9_drift") or []
+    if not drift:
+        lines.append("_No checkout mapping provided for this run._")
+    else:
+        lines.append("| Clank | Checkout HEAD | Ledger SHA | Relationship |")
+        lines.append("|---|---|---|---|")
+        for row in drift:
+            lines.append(
+                f"| {row['clank']} | {row['checkout_head'][:12]} "
+                f"| {str(row['ledger_sha'])[:12]} | {row['relationship']} |"
+            )
+    lines += [
+        "",
+        "_Downgrade-only synthesis: UNKNOWN evidence never upgrades to HEALTHY._",
+        "_Clank databases remain authoritative; this document is derived._",
+        "",
+    ]
+    return chr(10).join(lines)

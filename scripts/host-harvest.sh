@@ -6,8 +6,15 @@ HOME_DIR="$(dirname "$(dirname "$0")")"
 REAL_STATE="$HOME_DIR/real-state"
 sudo -n "$HOME_DIR/scripts/refresh-real-state.sh" "$REAL_STATE"
 cd "$HOME_DIR"
-exec .venv/bin/motherclank harvest \
+.venv/bin/motherclank harvest \
   --inventory ../diagnostic-clank/clank-fleet/inventories/fleet.yaml \
   --real-state "$REAL_STATE" \
   --out var \
   --adapters-src ../diagnostic-clank
+
+# M1: derive fleet health from the freshest snapshot (Law 9 checkouts included)
+.venv/bin/motherclank synthesize \
+  --var-dir var \
+  --out var \
+  --stale-hours 24 \
+  --drift-checkouts scripts/law9-checkouts.json

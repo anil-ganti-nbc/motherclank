@@ -15,7 +15,9 @@ from pathlib import Path
 
 from .adapters import AdapterPlaneUnavailable, build_adapters
 from . import snapshot as snap
-from .report import render_report, write_report
+from . import synthesis as syn
+from .drift import drift_row, DEFAULT_HETZNER_CHECKOUTS
+from .report import render_report, write_report, render_synthesis
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,11 +32,56 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--out", type=Path, default=Path("var"), help="output directory")
     h.add_argument("--dry-run", action="store_true",
                    help="compute and print; write nothing")
+    z = sub.add_parser("synthesize", help="derive fleet health from the latest M0 snapshot")
+    z.add_argument("--var-dir", required=True, type=Path,
+                   help="M0 output directory containing snapshots/")
+    z.add_argument("--out", type=Path, default=Path("var"))
+    z.add_argument("--stale-hours", type=float, default=24.0)
+    z.add_argument("--drift-checkouts", type=Path, default=None,
+                   help="optional JSON {clank: checkout_path} for Law 9 metric")
+    z.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     if args.command == "harvest":
         return _harvest(args)
+    if args.command == "synthesize":
+        return _synthesize(args)
     return 2
+
+
+def _synthesize(args) -> int:
+    payload = syn.read_latest_snapshot(args.var_dir)
+    if payload is None:
+        print(f"no snapshots found under {args.var_dir / 'snapshots'}", file=sys.stderr)
+        return 5
+    synthesis = syn.synthesize_fleet(payload, stale_hours=args.stale_hours)
+    drift_rows = []
+    if args.drift_checkouts:
+        mapping = json.loads(args.drift_checkouts.read_text())
+        inventory = json.loads(json.dumps({}))  # placeholder; ledger SHAs come from var inventory copy if present
+        ledger_file = Path(args.var_dir) / "inventory-ledger.json"
+        ledger = json.loads(ledger_file.read_text()) if ledger_file.exists() else {}
+        for cid, checkout in mapping.items():
+            drift_rows.append(drift_row(cid, Path(checkout),
+                                        ledger.get(cid), ledger.get(cid + ":observed_at")))
+    syn.attach_law9_drift(synthesis, drift_rows)
+    synthesis["content_hash"] = syn.content_hash(synthesis)
+    prev = syn.previous_synthesis_hash(args.out)
+    synthesis["previous_synthesis_hash"] = prev
+
+    if args.dry_run:
+        print(render_synthesis(synthesis))
+        print("--- synthesis payload ---")
+        print(json.dumps(synthesis, sort_keys=True, indent=2, default=str))
+    else:
+        target = syn.append_synthesis(args.out, synthesis)
+        rep_dir = args.out / "reports"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        report = rep_dir / f"fleet-synthesis-{synthesis['synthesized_at_utc'].replace(':', '').replace('+0000', 'Z')}.md"
+        report.write_text(render_synthesis(synthesis))
+        print(f"synthesis: {target}")
+        print(f"report:    {report}")
+    return 0
 
 
 def _harvest(args) -> int:
