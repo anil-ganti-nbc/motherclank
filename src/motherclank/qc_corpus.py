@@ -65,6 +65,15 @@ def ingest_clank(clank_id: str, adapter: Any, *,
         return block
     from clank_runtime.version import ADAPTER_CONTRACT_VERSION  # noqa: PLC0415
     block["adapter_contract_version"] = ADAPTER_CONTRACT_VERSION
+    try:
+        block["eligible"] = adapter.eligible_count()
+    except Exception as exc:
+        block["eligible"] = {"eligible_total": None, "error": str(exc)}
+    reviewed = len(block["records"])
+    block["reviewed_total"] = reviewed
+    corrections = sum(1 for r in block["records"]
+                      if r.get("is_corrected_upstream") or r.get("supersedes"))
+    block["correction_count"] = corrections
 
     for row in rows:
         raw = row.get("raw_disposition")
@@ -155,12 +164,28 @@ def build_corpus(previous_batch: dict[str, Any] | None,
             dist[d] = dist.get(d, 0) + 1
             if d == UNMAPPED and len(unmapped_examples) < 5:
                 unmapped_examples.append(r["raw_disposition"])
-        coverage[cid] = {"total_records": len(recs),
-                         "fleet_distribution": dist,
-                         "unmapped_examples": unmapped_examples,
-                         "excluded_machine_scoring": (
-                             "smartphone confidence_ledger excluded by design"
-                             if cid == "smartphone-clank" else None)}
+        eligible_block = clank_blocks.get(cid, {}).get("eligible") or {}
+        eligible = eligible_block.get("eligible_total")
+        reviewed = len(recs)
+        review_rate = round(reviewed / eligible, 4) if isinstance(eligible, int) and eligible else None
+        correction_rate = (round(sum(1 for r in recs
+                                     if r.get("is_corrected_upstream")
+                                     or r.get("supersedes")) / reviewed, 4)
+                           if reviewed else None)
+        coverage[cid] = {
+            "total_records": reviewed,
+            "eligible_items": eligible,
+            "eligible_detail": {k: v for k, v in eligible_block.items()
+                                 if k != "eligible_total"} or None,
+            "review_rate": review_rate,
+            "disposition_distribution": dist,
+            "unmapped_examples": unmapped_examples,
+            "unmapped_rate": (round(dist.get(UNMAPPED, 0) / reviewed, 4)
+                              if reviewed else None),
+            "correction_rate": correction_rate,
+            "excluded_machine_scoring": (
+                "smartphone confidence_ledger excluded by design"
+                if cid == "smartphone-clank" else None)}
 
     payload = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -228,11 +253,22 @@ def render_coverage(batch: dict[str, Any]) -> str:
         "|---|---|---|---|---|",
     ]
     for cid, cov in sorted((batch.get("coverage") or {}).items()):
-        dist = cov.get("fleet_distribution") or {}
+        dist = cov.get("disposition_distribution") or {}
         dist_s = ", ".join(f"{k}:{v}" for k, v in sorted(dist.items())) or "none"
         unmapped = ", ".join(repr(u) for u in (cov.get("unmapped_examples") or [])[:3])
+        rate = cov.get("review_rate")
+        corr = cov.get("correction_rate")
+        elig = cov.get("eligible_items")
+        extra = []
+        if elig is not None:
+            extra.append(f"eligible={elig}")
+        if rate is not None:
+            extra.append(f"review_rate={rate:.1%}")
+        if corr is not None:
+            extra.append(f"correction_rate={corr:.1%}")
+        note_col = "; ".join([e for e in extra if e] + ([cov.get("excluded_machine_scoring")] if cov.get("excluded_machine_scoring") else []))
         lines.append(f"| {cid} | {cov.get('total_records', 0)} | {dist_s} "
-                     f"| {unmapped or '-'} | {cov.get('excluded_machine_scoring') or '-'} |")
+                     f"| {unmapped or '-'} | {note_col or '-'} |")
     lines += [
         "",
         "_Raw dispositions are preserved verbatim; fleet values appear only where",

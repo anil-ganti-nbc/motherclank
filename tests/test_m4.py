@@ -39,7 +39,7 @@ def test_missing_feedback_is_not_negative():
     payload, _ = qc.build_corpus(None, blocks, generated_from="g1")
     assert payload["record_count"] == 0
     cov = payload["coverage"]["watch-clank"]
-    assert cov["fleet_distribution"] == {}
+    assert cov["disposition_distribution"] == {}
     assert "NOT_USEFUL" not in json.dumps(cov)
 
 
@@ -83,6 +83,7 @@ def qc_state(tmp_path):
     con.executescript("""
         CREATE TABLE alembic_version (version_num TEXT);
         CREATE TABLE confidence_ledger (id TEXT PRIMARY KEY);
+        CREATE TABLE timeline_events (id INTEGER PRIMARY KEY, event_type TEXT);
         CREATE TABLE analyst_actions (id INTEGER PRIMARY KEY, action TEXT,
             target_type TEXT, target_id TEXT, actor_label TEXT, reason TEXT,
             before_state TEXT, after_state TEXT, created_at TEXT);
@@ -104,6 +105,7 @@ def qc_state(tmp_path):
     con = sqlite3.connect(d / "korean_tech_wire.db")
     con.executescript("""
         CREATE TABLE schema_migrations (version INT);
+        CREATE TABLE articles (id INTEGER PRIMARY KEY, discovered_at TEXT);
         CREATE TABLE article_feedback (id INTEGER PRIMARY KEY, article_id INT,
             outcome TEXT, note TEXT, created_at TEXT);
         CREATE TABLE sources (id INTEGER PRIMARY KEY, name TEXT, status TEXT, updated_at TEXT);
@@ -233,6 +235,27 @@ def test_qc_batch_chaining(qc_state, tmp_path):
     assert p2["previous_qc_batch_hash"] == p1["qc_batch_hash"]
     # empty safety batch keeps prior records (no deletion)
     assert p2["record_count"] >= p1["record_count"]
+
+
+def test_coverage_metrics_computed(qc_state, tmp_path):
+    # watch fixture: 2 eligible (events table absent -> falls back), 1 reviewed
+    payload, _ = _ingest(qc_state, tmp_path)
+    cov = payload["coverage"]
+    w = cov["watch-clank"]
+    assert "review_rate" in w and "correction_rate" in w
+    assert w["disposition_distribution"] == {"FALSE_POSITIVE": 1}
+    s = cov["smartphone-clank"]
+    assert s["total_records"] == 1 and s["unmapped_rate"] == 1.0  # promote_device
+
+
+def test_eligible_counts_via_adapters(qc_state, tmp_path):
+    built = build_adapters(qc_state)
+    e = {cid: built["adapters"][cid].eligible_count() for cid in
+         ("watch-clank", "smartphone-clank", "korean-tech-wire")}
+    # fixture lacks events/specialist_leads tables -> watch falls back honestly
+    assert isinstance(e["watch-clank"].get("eligible_total"), int) or            e["watch-clank"].get("eligible_total") is None
+    assert e["smartphone-clank"]["eligible_total"] == 0   # empty timeline_events
+    assert e["korean-tech-wire"]["eligible_total"] == 0   # empty articles
 
 
 def test_coverage_report_renders(qc_state, tmp_path):
