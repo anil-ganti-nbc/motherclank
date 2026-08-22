@@ -80,17 +80,21 @@ def bridge_recommendations(batch: dict[str, Any], *, inbox_db_path: Path,
         saved, deduped = [], []
         for rec in batch.get("recommendations", []):
             text = render_recommendation_text(rec, batch)
-            clank_id = rec.get("clank_id") or "fleet-wide"
-            # ADR-0003 §2: fleet-wide only when genuinely fleet-wide. The M3
-            # rule table emits clank_id per anomaly; FLEET_HEALTH_DEGRADATION-
-            # class records still name their subject Clank, so only an empty
-            # clank_id falls back to the registry-exempt fleet-wide id.
+            clank_id = rec.get("clank_id")
+            # ADR-0003 fail-closed identity: every M3 recommendation names its
+            # affected Clank. Missing/empty/blank identity is malformed input
+            # and must abort the bridge — it is never rewritten to
+            # 'fleet-wide', which would misattribute a broken record.
+            if not isinstance(clank_id, str) or not clank_id.strip():
+                raise ValueError(
+                    f"malformed recommendation identity: {rec.get('recommendation_id')!r} "
+                    f"has invalid clank_id {clank_id!r}")
             rec_out = inbox.save(
                 agent_family=AgentFamily.MISC,
                 primary_clank_id=clank_id,
                 raw_text=text,
                 output_type=OutputType.RECOMMENDATION,
-                related_clank_ids=[clank_id] if clank_id != "fleet-wide" else [],
+                related_clank_ids=[clank_id],
                 misc_source=misc_source,
                 session_label=batch.get("batch_hash"),
                 external_ref=rec["recommendation_id"],
