@@ -56,25 +56,28 @@ def load_batches(var_dir: Path) -> list[dict[str, Any]]:
                     batches.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-    batches.sort(key=lambda b: b.get("generated_from", ""))
+
     return batches
 
 
 def provenance_integrity(batches: list[dict[str, Any]]) -> dict[str, Any]:
     """M5 gate G7: every record carries contract version + ingestion snapshot
-    hash; every supersedes target exists as some earlier record's hash."""
+    hash; every supersedes target exists somewhere in history (closure check,
+    order-free — append-only batches need not be chronologically keyed)."""
     total = missing = 0
-    known_hashes: set[str] = set()
-    broken_links = 0
+    all_hashes: set[str] = set()
+    supersedes_targets: list[tuple[str, Any]] = []
     for batch in batches:
         for rec in (batch.get("corpus") or {}).get("records", []):
             total += 1
-            if not rec.get("ingestion_snapshot_hash") or rec.get("ingestion_snapshot_hash") == "no-snapshot":
+            snap = rec.get("ingestion_snapshot_hash")
+            if not snap or snap == "no-snapshot":
                 missing += 1
             sup = rec.get("supersedes")
-            if sup and sup not in known_hashes:
-                broken_links += 1
-            known_hashes.add(rec.get("content_hash"))
+            if sup:
+                supersedes_targets.append((rec.get("corpus_id"), sup))
+            all_hashes.add(rec.get("content_hash"))
+    broken_links = sum(1 for _, sup in supersedes_targets if sup not in all_hashes)
     ok = total > 0 and missing == 0 and broken_links == 0
     return {"records_checked": total, "missing_snapshot_hash": missing,
             "broken_supersedes_links": broken_links, "pass": ok}
@@ -149,6 +152,12 @@ def score_gates(coverage: dict[str, Any], integrity: dict[str, Any],
 def build_soak_report(var_dir: Path, *, as_of: str | None = None,
                       batches: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     batches = batches if batches is not None else load_batches(var_dir)
+
+    def _order_key(b):
+        g = str(b.get("generated_from", ""))
+        # legacy hash-named keys predate ISO timestamps
+        return (1, g) if g.startswith("20") else (0, g)
+    batches = sorted(batches, key=_order_key)
     latest = batches[-1] if batches else None
     previous = batches[-2] if len(batches) >= 2 else None
     warnings: list[str] = []

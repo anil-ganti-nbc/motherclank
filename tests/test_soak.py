@@ -105,6 +105,29 @@ def test_correction_and_delta_accounting():
 
 
 
+def test_legacy_hash_keyed_batches_sort_first_and_chains_close():
+    legacy = {"generated_from": "sha256:legacy",
+              "batch_hash": "sha256:l1",
+              "coverage": {},
+              "corpus": {"clanks": {}, "records": [
+                  {"corpus_id": "qc-x", "content_hash": "h-old",
+                   "clank_id": "w", "fleet_disposition": "USEFUL"}]}}
+    newer = {"generated_from": "2026-08-23T00:00:00+00:00",
+             "batch_hash": "sha256:n1",
+             "coverage": {},
+             "corpus": {"clanks": {}, "records": [
+                 {"corpus_id": "qc-y", "content_hash": "h-new",
+                  "clank_id": "w", "fleet_disposition": "NOT_USEFUL",
+                  "supersedes": "h-old"}]}}
+    payload, _ = soak.build_soak_report(Path(tempfile.mkdtemp()),
+                                        batches=[newer, legacy])  # deliberately reversed
+    integ = payload["provenance_integrity"]
+    assert integ["broken_supersedes_links"] == 0
+    assert integ["records_checked"] == 2
+    assert payload["window"]["latest"] == "2026-08-23T00:00:00+00:00"
+    assert payload["boundary_note"]
+
+
 def test_boundary_language_present():
     p, _ = soak.build_soak_report(Path(tempfile.mkdtemp()))
     assert "NEVER promote" in p["boundary_note"]
