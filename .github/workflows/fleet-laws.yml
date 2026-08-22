@@ -26,7 +26,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Fleet Laws conformance + M0 tests
+        working-directory: motherclank
         run: |
-          pip install pytest pyyaml pydantic
-          pytest clank-architecture/conformance -q
-          pytest motherclank/tests -q
+          pip install -e . pytest pyyaml pydantic
+          pytest ../clank-architecture/conformance -q
+          pytest tests -q
