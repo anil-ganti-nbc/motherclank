@@ -103,7 +103,8 @@ def ingest_clank(clank_id: str, adapter: Any, *,
 
 def build_corpus(previous_batch: dict[str, Any] | None,
                  clank_blocks: dict[str, dict[str, Any]], *,
-                 generated_from: str) -> tuple[dict[str, Any], list[str]]:
+                 generated_from: str,
+                 snapshot_hash: str = "no-snapshot") -> tuple[dict[str, Any], list[str]]:
     """Merge current observations with previous batch into lineage-carrying
     records. Returns (batch_payload, warnings)."""
     warnings: list[str] = []
@@ -194,6 +195,7 @@ def build_corpus(previous_batch: dict[str, Any] | None,
         "generated_from": generated_from,
         "rules_version": RULES_VERSION,
         "previous_qc_batch_hash": (previous_batch or {}).get("qc_batch_hash"),
+        "snapshot_hash": snapshot_hash,
         "corpus": {"clanks": clank_blocks, "records": merged},
         "coverage": coverage,
     }

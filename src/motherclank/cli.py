@@ -82,6 +82,8 @@ def _ingest_qc(args) -> int:
     # ingestion snapshot hash: reuse latest harvest snapshot if present
     latest = syn.read_latest_snapshot(args.var_dir) if hasattr(syn, "read_latest_snapshot") else None
     snap_hash = (latest or {}).get("content_hash", "no-snapshot")
+    generated_from = (latest or {}).get("harvested_at_utc") \
+        or datetime.now(UTC).isoformat(timespec="seconds")
     previous = qc.read_previous_qc_batch(args.out)
     blocks = {}
     for cid in ("watch-clank", "smartphone-clank", "korean-tech-wire"):
@@ -89,8 +91,8 @@ def _ingest_qc(args) -> int:
         blocks[cid] = qc.ingest_clank(cid, adapter,
                                       ingestion_snapshot_hash=snap_hash)
     payload, warnings = qc.build_corpus(previous, blocks,
-                                        generated_from=snap_hash if snap_hash != "no-snapshot"
-                                        else datetime.now(UTC).isoformat(timespec="seconds"))
+                                        generated_from=generated_from,
+                                        snapshot_hash=snap_hash)
     if args.dry_run:
         print(qc.render_coverage(payload))
     else:
