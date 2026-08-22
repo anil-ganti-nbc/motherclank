@@ -17,7 +17,7 @@ from .adapters import AdapterPlaneUnavailable, build_adapters
 from . import snapshot as snap
 from . import synthesis as syn
 from .drift import drift_row, DEFAULT_HETZNER_CHECKOUTS
-from .report import render_report, write_report, render_synthesis, render_anomalies
+from .report import render_report, write_report, render_synthesis, render_anomalies, render_recommendations
 from . import anomalies as ano
 from . import recommendations as recs
 
