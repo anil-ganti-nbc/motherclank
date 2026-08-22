@@ -24,4 +24,7 @@ for name, src in sources.items():
     print("backed up:", name)
 PYBACKUP
 chmod 644 "$DEST"/*.db
+# Hand directory back to the invoking user so unprivileged WAL readers can
+# create their -shm sidecars (mode=ro on WAL requires directory write).
+if [ -n "${SUDO_USER:-}" ]; then chown -R "$SUDO_USER" "$DEST"; fi
 echo "refreshed: $DEST"
