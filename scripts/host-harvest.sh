@@ -27,3 +27,6 @@ cd "$HOME_DIR"
 
 # M4: append-only human-QC corpus (watch/smartphone/ktw), read-only
 .venv/bin/motherclank ingest-qc --real-state "$REAL_STATE" --var-dir var --out var
+
+# QC Soak: periodic coverage/gates report (Axis B only)
+.venv/bin/motherclank soak-report --var-dir var --out var

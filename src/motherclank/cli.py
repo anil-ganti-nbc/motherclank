@@ -22,6 +22,7 @@ from .report import render_report, write_report, render_synthesis, render_anomal
 from . import anomalies as ano
 from . import recommendations as recs
 from . import qc_corpus as qc
+from . import soak
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--out", type=Path, default=Path("var"))
     q.add_argument("--adapters-src", type=Path, default=None)
     q.add_argument("--dry-run", action="store_true")
+    sr = sub.add_parser("soak-report", help="periodic QC-soak report + M5 gate scoring (Axis B)")
+    sr.add_argument("--var-dir", required=True, type=Path)
+    sr.add_argument("--out", type=Path, default=Path("var"))
+    sr.add_argument("--as-of", type=str, default=None,
+                    help="ISO timestamp anchor; defaults to latest batch")
+    sr.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     if args.command == "harvest":
@@ -70,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         return _recommend(args)
     if args.command == "ingest-qc":
         return _ingest_qc(args)
+    if args.command == "soak-report":
+        return _soak_report(args)
     return 2
 
 
@@ -117,6 +126,23 @@ def _ingest_qc(args) -> int:
     if args.command == "recommend":
         return _recommend(args)
     return 2
+
+
+def _soak_report(args) -> int:
+    payload, warnings = soak.build_soak_report(args.var_dir, as_of=args.as_of)
+    if args.dry_run:
+        print(soak.render_soak(payload))
+    else:
+        target = soak.append_report(args.out, payload)
+        rep_dir = args.out / "reports"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        report = rep_dir / f"qc-soak-{str(payload['window']['latest']).replace(':', '').replace('+0000', 'Z')}.md"
+        report.write_text(soak.render_soak(payload))
+        print(f"soak-report: {target}")
+        print(f"report:      {report}")
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    return 0
 
 
 def _recommend(args) -> int:
