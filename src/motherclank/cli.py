@@ -17,7 +17,8 @@ from .adapters import AdapterPlaneUnavailable, build_adapters
 from . import snapshot as snap
 from . import synthesis as syn
 from .drift import drift_row, DEFAULT_HETZNER_CHECKOUTS
-from .report import render_report, write_report, render_synthesis
+from .report import render_report, write_report, render_synthesis, render_anomalies
+from . import anomalies as ano
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,13 +41,42 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--drift-checkouts", type=Path, default=None,
                    help="optional JSON {clank: checkout_path} for Law 9 metric")
     z.add_argument("--dry-run", action="store_true")
+    d = sub.add_parser("detect", help="deterministic anomaly ledger from M0/M1 history")
+    d.add_argument("--var-dir", required=True, type=Path)
+    d.add_argument("--out", type=Path, default=Path("var"))
+    d.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     if args.command == "harvest":
         return _harvest(args)
     if args.command == "synthesize":
         return _synthesize(args)
+    if args.command == "detect":
+        return _detect(args)
     return 2
+
+
+def _detect(args) -> int:
+    history = ano.load_history(args.var_dir)
+    if not history:
+        print(f"no snapshots under {args.var_dir / 'snapshots'}", file=sys.stderr)
+        return 5
+    found = ano.detect(history)
+    batch = ano.build_batch(args.out, history, found)
+    if args.dry_run:
+        print(render_anomalies(batch))
+        print("--- anomaly batch payload ---")
+        print(json.dumps(batch, sort_keys=True, indent=2, default=str))
+    else:
+        target = ano.append_batch(args.out, batch)
+        rep_dir = args.out / "reports"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        report = rep_dir / f"anomalies-{batch['batch_generated_from'].replace(':', '').replace('+0000', 'Z')}.md"
+        report.write_text(render_anomalies(batch))
+        print(f"anomalies: {target}")
+        print(f"report:    {report}")
+        print(f"active={batch['active_count']} recovered={batch['recovered_count']}")
+    return 0
 
 
 def _synthesize(args) -> int:

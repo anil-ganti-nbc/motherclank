@@ -18,3 +18,6 @@ cd "$HOME_DIR"
   --out var \
   --stale-hours 24 \
   --drift-checkouts scripts/law9-checkouts.json
+
+# M2: deterministic anomaly ledger over accumulated history
+.venv/bin/motherclank detect --var-dir var --out var

@@ -10,6 +10,10 @@ motherclank harvest --inventory fleet.yaml --real-state DIR [--out DIR] [--dry-r
   workspace sibling `../diagnostic-clank`, or via `--adapters-src`).
 - Onboarded order (Phase 2C): watch-clank → smartphone-clank → korean-tech-wire →
   feature-phone-clank.
+- M1 `synthesize` derives per-Clank/fleet health (downgrade-only) and the Law 9
+  drift metric; M2 `detect` maintains a deterministic anomaly ledger
+  (transitions, blocked streaks, stale runs, scheduler invocation-vs-work,
+  revision drift, fleet degradation; lifecycle NEW/ONGOING/RECOVERED).
 - Emits append-only dated JSONL snapshots (`var/snapshots/YYYY-MM-DD.jsonl`) plus one
   derived Markdown report (`var/reports/fleet-*.md`). `--dry-run` writes nothing.
 - UNKNOWN is preserved verbatim; missing data never becomes healthy/zero.

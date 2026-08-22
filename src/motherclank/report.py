@@ -122,3 +122,36 @@ def render_synthesis(synth: dict[str, Any]) -> str:
         "",
     ]
     return chr(10).join(lines)
+
+
+def render_anomalies(batch: dict[str, Any]) -> str:
+    lines = [
+        "# Motherclank anomaly ledger (DERIVED — M2, deterministic)",
+        "",
+        f"- Generated from observations through: {batch.get('batch_generated_from', _UNKNOWN)}",
+        f"- Detection rules: {batch.get('detection_rules_version', _UNKNOWN)}",
+        f"- Active: {batch.get('active_count', 0)} · Recovered: {batch.get('recovered_count', 0)}",
+        f"- Previous batch: {batch.get('previous_batch_hash') or 'none (first)'}",
+        f"- Batch hash: {batch.get('batch_hash', _UNKNOWN)}",
+        "",
+        "| Lifecycle | Severity | Type | Clank | Subject | First seen | Last seen | Latest evidence |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    order = {"NEW": 0, "ONGOING": 1, "REOPENED": 0, "RECOVERED": 2}
+    for a in sorted(batch.get("anomalies", []),
+                    key=lambda x: (order.get(x["lifecycle"], 3), x["severity"],
+                                   x["type"], x["clank_id"])):
+        latest = (a["evidence"] or [{}])[-1].get("detail", "")
+        lines.append(
+            f"| {a['lifecycle']} | {a['severity']} | {a['type']} "
+            f"| {a['clank_id']} | {a['subject'][:28]} "
+            f"| {a['first_seen'][:19]} | {a['last_seen'][:19]} "
+            f"| {latest[:70]} |"
+        )
+    lines += [
+        "",
+        "_Deterministic rules only. UNKNOWN never proves failure; transitions are",
+        "judged between two KNOWN observations. Recovered anomalies are retained._",
+        "",
+    ]
+    return chr(10).join(lines)
