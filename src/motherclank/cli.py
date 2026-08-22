@@ -53,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--var-dir", required=True, type=Path)
     rr.add_argument("--out", type=Path, default=Path("var"))
     rr.add_argument("--dry-run", action="store_true")
+    rr.add_argument("--inbox-db", type=Path, default=None,
+                    help="ADR-0003 bridge: Agent Inbox SQLite path; omit to skip bridging")
+    rr.add_argument("--inventory", type=Path, default=None,
+                    help="canonical fleet.yaml; REQUIRED with --inbox-db (registry seed source)")
+    rr.add_argument("--adapters-src", type=Path, default=None,
+                    help="diagnostic-clank checkout root (defaults to workspace sibling)")
     q = sub.add_parser("ingest-qc", help="append-only human-QC corpus from read-only adapters")
     q.add_argument("--real-state", required=True, type=Path)
     q.add_argument("--var-dir", required=True, type=Path)
@@ -165,6 +171,34 @@ def _recommend(args) -> int:
         print(f"recommendations: {target}")
         print(f"report:          {report}")
         print(f"active={payload['active_count']} closed={payload['closed_count']}")
+        # ADR-0003 §2: bridge into the Agent Inbox when an Inbox DB is given.
+        # Local artifacts and Inbox delivery are separate outcomes, reported
+        # independently; a bridge failure never masquerades as success.
+        if args.inbox_db is not None:
+            if args.inventory is None:
+                print("inbox: DELIVERY FAILED: --inventory (fleet.yaml) is required "
+                      "with --inbox-db; bridging refuses to run without canonical "
+                      "membership data", file=sys.stderr)
+                return 7
+            try:
+                from .registry_shim import operator_registry
+                from .inbox_bridge import bridge_recommendations
+                summary = bridge_recommendations(
+                    payload, inbox_db_path=args.inbox_db,
+                    registry=operator_registry(args.inventory),
+                    diagnostic_clank_src=args.adapters_src,
+                    rules_version=payload.get("rules_version", ""),
+                )
+            except Exception as exc:  # noqa: BLE001 — reported verbatim, not swallowed
+                print(f"inbox: DELIVERY FAILED: {type(exc).__name__}: {exc}",
+                      file=sys.stderr)
+                print("(local recommendation artifacts were written successfully "
+                      "before the failure; see paths above)", file=sys.stderr)
+                return 7
+            # Success line printed only after the ENTIRE batch completed.
+            print(f"inbox:           delivered={len(summary['saved'])} "
+                  f"deduplicated={summary['deduplicated']} "
+                  f"producer={summary['misc_source']}")
     return 0
 
     if args.command == "harvest":
