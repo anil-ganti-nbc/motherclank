@@ -9,6 +9,7 @@ without touching disk beyond stdout.
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ from .drift import drift_row, DEFAULT_HETZNER_CHECKOUTS
 from .report import render_report, write_report, render_synthesis, render_anomalies, render_recommendations
 from . import anomalies as ano
 from . import recommendations as recs
+from . import qc_corpus as qc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,7 +52,59 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--var-dir", required=True, type=Path)
     rr.add_argument("--out", type=Path, default=Path("var"))
     rr.add_argument("--dry-run", action="store_true")
+    q = sub.add_parser("ingest-qc", help="append-only human-QC corpus from read-only adapters")
+    q.add_argument("--real-state", required=True, type=Path)
+    q.add_argument("--var-dir", required=True, type=Path)
+    q.add_argument("--out", type=Path, default=Path("var"))
+    q.add_argument("--adapters-src", type=Path, default=None)
+    q.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.command == "harvest":
+        return _harvest(args)
+    if args.command == "synthesize":
+        return _synthesize(args)
+    if args.command == "detect":
+        return _detect(args)
+    if args.command == "recommend":
+        return _recommend(args)
+    if args.command == "ingest-qc":
+        return _ingest_qc(args)
+    return 2
+
+
+def _ingest_qc(args) -> int:
+    try:
+        built = build_adapters(args.real_state)
+    except AdapterPlaneUnavailable as exc:
+        print(f"adapter plane unavailable: {exc}", file=sys.stderr)
+        return 4
+    # ingestion snapshot hash: reuse latest harvest snapshot if present
+    latest = syn.read_latest_snapshot(args.var_dir) if hasattr(syn, "read_latest_snapshot") else None
+    snap_hash = (latest or {}).get("content_hash", "no-snapshot")
+    previous = qc.read_previous_qc_batch(args.out)
+    blocks = {}
+    for cid in ("watch-clank", "smartphone-clank", "korean-tech-wire"):
+        adapter = built["adapters"].get(cid)
+        blocks[cid] = qc.ingest_clank(cid, adapter,
+                                      ingestion_snapshot_hash=snap_hash)
+    payload, warnings = qc.build_corpus(previous, blocks,
+                                        generated_from=snap_hash if snap_hash != "no-snapshot"
+                                        else datetime.now(UTC).isoformat(timespec="seconds"))
+    if args.dry_run:
+        print(qc.render_coverage(payload))
+    else:
+        target = qc.append_qc_batch(args.out, payload)
+        rep_dir = args.out / "reports"
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        report = rep_dir / f"qc-coverage-{payload['generated_from'].replace(':', '').replace('+0000', 'Z')}.md"
+        report.write_text(qc.render_coverage(payload))
+        print(f"qc-corpus: {target}")
+        print(f"report:    {report}")
+        print(f"records={payload['record_count']}")
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    return 0
 
     if args.command == "harvest":
         return _harvest(args)

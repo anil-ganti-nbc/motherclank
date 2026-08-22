@@ -24,3 +24,6 @@ cd "$HOME_DIR"
 
 # M3: advisory operator recommendations from the anomaly ledger
 .venv/bin/motherclank recommend --var-dir var --out var
+
+# M4: append-only human-QC corpus (watch/smartphone/ktw), read-only
+.venv/bin/motherclank ingest-qc --real-state "$REAL_STATE" --var-dir var --out var
