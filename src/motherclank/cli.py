@@ -59,11 +59,12 @@ def _synthesize(args) -> int:
     if args.drift_checkouts:
         mapping = json.loads(args.drift_checkouts.read_text())
         inventory = json.loads(json.dumps({}))  # placeholder; ledger SHAs come from var inventory copy if present
-        ledger_file = Path(args.var_dir) / "inventory-ledger.json"
-        ledger = json.loads(ledger_file.read_text()) if ledger_file.exists() else {}
+        ledger = payload.get("inventory_ledger") or {}
+        observed_at = payload.get("harvested_at_utc")
         for cid, checkout in mapping.items():
             drift_rows.append(drift_row(cid, Path(checkout),
-                                        ledger.get(cid), ledger.get(cid + ":observed_at")))
+                                        ledger.get(cid),
+                                        observed_at))
     syn.attach_law9_drift(synthesis, drift_rows)
     synthesis["content_hash"] = syn.content_hash(synthesis)
     prev = syn.previous_synthesis_hash(args.out)

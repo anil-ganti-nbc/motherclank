@@ -124,6 +124,12 @@ def test_every_claim_carries_provenance(real_state, tmp_path, fleet_yaml):
         assert isinstance(claim["evidence_fields"], list)
 
 
+def test_inventory_ledger_extracted_from_fleet_yaml(fleet_yaml):
+    from motherclank.snapshot import _inventory_ledger
+    ledger = _inventory_ledger(fleet_yaml.read_text())
+    assert "watch-clank" in ledger and len(ledger["watch-clank"]) == 40
+
+
 def snap_build(tmp_path, built, real_state, fleet_yaml):
     from motherclank import snapshot as snap
     out = tmp_path / "var"

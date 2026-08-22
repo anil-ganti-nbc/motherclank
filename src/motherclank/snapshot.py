@@ -144,8 +144,12 @@ def build_snapshot(
 
     inv_text = inventory_path.read_text()
     inv_rev = _inventory_revision(inventory_path, inv_text)
-
-    payload = {
+    payload: dict[str, Any] = {}
+    payload_extra: dict[str, Any] = {}
+    ledger = _inventory_ledger(inv_text)
+    if ledger:
+        payload_extra["inventory_ledger"] = ledger
+    payload.update({
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "derived_label": "DERIVED — synthesized by Motherclank M0; Clank DBs remain authoritative",
         "harvested_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -154,7 +158,8 @@ def build_snapshot(
         "previous_snapshot_hash": find_previous_snapshot_hash(out_dir / "snapshots"),
         "read_only_proof_total_changes": db_readonly_proof(ro_paths),
         "clanks": clanks_out,
-    }
+    })
+    payload.update(payload_extra)
     payload["content_hash"] = content_hash(payload)
     for cid, block in clanks_out.items():
         failed_parts = []
@@ -193,3 +198,25 @@ def append_snapshot(out_dir: Path, payload: dict[str, Any]) -> Path:
     with target.open("a") as fh:
         fh.write(line + "\n")
     return target
+
+
+def _inventory_ledger(inv_text: str) -> dict[str, str]:
+    """Per-repository deployed_commit_sha from fleet.yaml content (best effort).
+    Empty dict when yaml is unavailable or the structure differs — never guesses."""
+    try:
+        import yaml  # noqa: PLC0415
+    except ImportError:
+        return {}
+    try:
+        doc = yaml.safe_load(inv_text) or {}
+        out: dict[str, str] = {}
+        for row in doc.get("deployments") or []:
+            if not isinstance(row, dict):
+                continue
+            repo = row.get("repository")
+            sha = row.get("deployed_commit_sha")
+            if repo and isinstance(sha, str) and len(sha) == 40 and sha != "UNKNOWN":
+                out[str(repo)] = sha
+        return out
+    except Exception:
+        return {}
