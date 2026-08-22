@@ -1,0 +1,52 @@
+# Motherclank M0
+
+Read-only fleet harvester per [ADR-0002](https://github.com/anil-ganti-nbc/clank-architecture/blob/main/adr/0002-motherclank-supervisory-architecture.md).
+
+```
+motherclank harvest --inventory fleet.yaml --real-state DIR [--out DIR] [--dry-run] [--adapters-src PATH]
+```
+
+- Consumes the Diagnostic-Clank-owned read-only adapters **unchanged** (located as
+  workspace sibling `../diagnostic-clank`, or via `--adapters-src`).
+- Onboarded order (Phase 2C): watch-clank → smartphone-clank → korean-tech-wire →
+  feature-phone-clank.
+- Emits append-only dated JSONL snapshots (`var/snapshots/YYYY-MM-DD.jsonl`) plus one
+  derived Markdown report (`var/reports/fleet-*.md`). `--dry-run` writes nothing.
+- UNKNOWN is preserved verbatim; missing data never becomes healthy/zero.
+- Adapter failures are isolated to their Clank block; the fleet snapshot always completes.
+- Every snapshot records inventory revision, adapter contract version,
+  `previous_snapshot_hash`, own `content_hash`, and a sqlite `total_changes`
+  read-only proof.
+
+## Hard boundaries (ADR-0002)
+
+No DB writes · no Clank mutations · no notifications · no locks on Clank stores ·
+no shared databases · no remediation · no QC learning · no control actions.
+The package source is scanned by tests for mutation/notification interfaces.
+
+## Host operation (Hetzner)
+
+```sh
+git clone https://github.com/anil-ganti-nbc/motherclank.git ~/motherclank
+cd ~/motherclank && python3 -m venv .venv && .venv/bin/pip install -e .
+# refresh read-only copies (operator-authorized sudo cp; see script)
+sudo -n ./scripts/refresh-real-state.sh ~/motherclank-real-state
+.venv/bin/motherclank harvest \
+  --inventory ../diagnostic-clank/clank-fleet/inventories/fleet.yaml \
+  --real-state ~/motherclank-real-state --dry-run   # validate first
+./scripts/install-user-timer.sh                       # ONE fixed-clock user timer
+systemctl --user start motherclank-harvest.service    # first run on demand
+```
+
+`scripts/host-harvest.sh` (the unit's ExecStart) refreshes copies then harvests —
+the sudo usage lives in this host wrapper only, never in the package.
+
+## Rollback
+
+```sh
+systemctl --user disable --now motherclank-harvest.timer
+rm -rf ~/.config/systemd/user/motherclank-harvest.{service,timer} && systemctl --user daemon-reload
+rm -rf ~/motherclank ~/motherclank-real-state var/   # snapshots are disposable DERIVED data
+```
+
+Clank databases remain authoritative at every moment; nothing else needs reversal.
