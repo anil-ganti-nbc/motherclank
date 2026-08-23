@@ -70,7 +70,8 @@ def _mk(anomaly_type: str, severity: str, clank_id: str, subject: str,
 
 
 def detect(snapshots: list[dict[str, Any]],
-           continuity_events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+           continuity_events: list[dict[str, Any]] | None = None,
+           liveness_expectations: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Derive the full anomaly ledger from ordered M0 snapshots.
 
     Deterministic replay: same input list => same output list. The wall clock
@@ -80,7 +81,15 @@ def detect(snapshots: list[dict[str, Any]],
     (a) emitted as explicit CONTINUITY_EVENT records instead of being read as
     organic source transitions, and (b) used to QUALIFY anomalies derived
     from observations inside a discontinuity window.
+
+    F6b: when an execution-expectations registry is supplied, expected-but-
+    unmaterialized runs raise MATERIALIZATION_GAP (an execution-plane fact),
+    while intentionally dormant lanes raise nothing.
     """
+    if liveness_expectations:
+        from . import liveness as live  # local import: optional dependency path
+    else:
+        live = None
     # stable ordering by harvest time, then content hash for ties
     snaps = sorted(snapshots,
                    key=lambda s: (s.get("harvested_at_utc", ""),
@@ -148,10 +157,30 @@ def detect(snapshots: list[dict[str, Any]],
 
             # --- stale-run transition (M1 R3 evidence) --------------------
             synthesis_rules = block.get("_synthesis_rules") or []
-            if STALE_RULE_MARKER in synthesis_rules:
+            expectation = None
+            dormant = False
+            if live is not None:
+                expectation = live.expectation_for(liveness_expectations, cid, at)
+                dormant = bool(expectation) and \
+                    expectation.get("policy") in live.DORMANT_POLICIES
+            if STALE_RULE_MARKER in synthesis_rules and not dormant:
                 upsert(_mk("STALE_RUN", "HIGH", cid, "*", at, shash,
                            "recency rule fired: last successful work older than "
                            "stale window"))
+            # --- materialization gap (F6b; pre-exec failure class) --------
+            if live is not None and expectation is not None and not dormant:
+                lv = live.derive_liveness(block, expectation, observed_at=at)
+                if lv["liveness_state"] == "MATERIALIZATION_GAP":
+                    ev = lv.get("evidence", {})
+                    upsert(_mk("MATERIALIZATION_GAP", "HIGH", cid,
+                               "execution", at, shash,
+                               f"expected execution did not materialize a run: "
+                               f"scheduler evidence age="
+                               f"{ev.get('last_invocation_age_seconds', 'UNKNOWN')}s, "
+                               f"last run age="
+                               f"{ev.get('last_run_age_seconds', 'UNKNOWN')}s; "
+                               f"cause NOT attributed (pre-exec failure, timer "
+                               f"silence, or observer blindness all possible)"))
 
         # --- scheduler invocation vs successful work (optional evidence) --
         for cid, block in snap.get("clanks", {}).items():
@@ -209,6 +238,13 @@ def detect(snapshots: list[dict[str, Any]],
             elif a["type"] == "STALE_RUN":
                 rules = block.get("_synthesis_rules") or []
                 recovered = STALE_RULE_MARKER not in rules
+            elif a["type"] == "MATERIALIZATION_GAP" and live is not None:
+                expectation = live.expectation_for(liveness_expectations, cid,
+                                                   final.get("harvested_at_utc", ""))
+                lv = (live.derive_liveness(block, expectation,
+                                           observed_at=final.get("harvested_at_utc", ""))
+                      if expectation else {"liveness_state": "UNKNOWN"})
+                recovered = lv["liveness_state"] != "MATERIALIZATION_GAP"
             elif a["type"] == "REVISION_DRIFT":
                 rows = [r for r in (final.get("law9_drift") or [])
                         if r.get("clank") == cid]

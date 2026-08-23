@@ -64,7 +64,8 @@ def _source_rollup(health: dict[str, Any]) -> dict[str, int] | None:
 
 def synthesize_clank(clank_id: str, block: dict[str, Any],
                      *, observed_at: str, stale_hours: float,
-                     continuity: dict[str, Any] | None = None) -> dict[str, Any]:
+                     continuity: dict[str, Any] | None = None,
+                     liveness: dict[str, Any] | None = None) -> dict[str, Any]:
     evidence: list[str] = []
     state = "UNKNOWN"
 
@@ -151,14 +152,15 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
         rules.append("R3")
 
     claim_obj = claim(state, sorted(set(rules)) or ["R6"])
-    # F6: continuity is an ORTHOGONAL dimension. It never upgrades or
-    # downgrades the operational state; it qualifies what the operational
-    # state may be assumed to mean (a known data-loss interval must never
-    # read as uninterrupted HEALTHY history). Sources, in order: an explicit
-    # context argument (registry-derived), else a harvest-time annotation
-    # already carried on the snapshot block.
+    # F6/F6b: continuity AND execution-liveness are ORTHOGONAL dimensions.
+    # They never upgrade or downgrade the operational state machine; they
+    # qualify what an operational state may be assumed to mean. Sources, in
+    # order: explicit context argument (registry-derived), else harvest-time
+    # annotations already carried on the snapshot block.
     if continuity is None and isinstance(block.get("continuity"), dict):
         continuity = block["continuity"]
+    if liveness is None and isinstance(block.get("liveness"), dict):
+        liveness = block["liveness"]
     if continuity is not None:
         claim_obj["continuity"] = {
             "continuity_state": continuity.get("continuity_state", "UNKNOWN_CONTINUITY"),
@@ -167,26 +169,45 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
             "evidence_refs": continuity.get("evidence_refs", []),
             "orthogonal_to_operational_state": True,
         }
+    if liveness is not None:
+        claim_obj["liveness"] = {
+            "liveness_state": liveness.get("liveness_state", "UNKNOWN"),
+            "policy": liveness.get("policy", "UNKNOWN"),
+            "stages": liveness.get("stages", {}),
+            "evidence": liveness.get("evidence", {}),
+            "orthogonal_to_operational_health": True,
+        }
     return claim_obj
 
 
 def synthesize_fleet(snapshot_payload: dict[str, Any], *,
                      stale_hours: float = 24.0,
-                     continuity_events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                     continuity_events: list[dict[str, Any]] | None = None,
+                     liveness_expectations: list[dict[str, Any]] | None = None,
+                     liveness_grace_multiplier: float = 2.0) -> dict[str, Any]:
     clanks_out = {}
     counts = {s: 0 for s in STATES}
     contexts: dict[str, dict[str, Any]] = {}
+    liveness_ctx: dict[str, dict[str, Any]] = {}
+    observed_at = snapshot_payload.get("harvested_at_utc", "")
     if continuity_events:
         from . import continuity as cont
-        observed_at = snapshot_payload.get("harvested_at_utc", "")
         for cid in snapshot_payload.get("clanks", {}):
             contexts[cid] = cont.continuity_context(continuity_events, cid, observed_at)
+    if liveness_expectations:
+        from . import liveness as live
+        for cid, block in snapshot_payload.get("clanks", {}).items():
+            exp = live.expectation_for(liveness_expectations, cid, observed_at)
+            liveness_ctx[cid] = live.derive_liveness(
+                block, exp, observed_at=observed_at,
+                grace_multiplier=liveness_grace_multiplier)
     for cid in sorted(snapshot_payload.get("clanks", {})):
         result = synthesize_clank(
             cid, snapshot_payload["clanks"][cid],
-            observed_at=snapshot_payload.get("harvested_at_utc", ""),
+            observed_at=observed_at,
             stale_hours=stale_hours,
             continuity=contexts.get(cid),
+            liveness=liveness_ctx.get(cid),
         )
         clanks_out[cid] = result
         counts[result["state"]] += 1

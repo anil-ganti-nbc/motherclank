@@ -63,6 +63,20 @@ _RULES: dict[str, dict[str, str]] = {
                    "compare timer/cron identity, invocation records and the Clank's "
                    "own run history before touching anything."),
     },
+    # F6b: expected execution produced no run. This is an execution-plane
+    # fact; pre-exec shell/redirect failure means the collector never ran,
+    # so collector-regression diagnosis is forbidden.
+    "MATERIALIZATION_GAP": {
+        "category": "DEPLOYMENT_SCHEDULER_INSPECTION",
+        "priority": "P1",
+        "title": "Expected execution did not materialize a run on {clank}",
+        "action": ("Inspect the execution path for {clank} in order: scheduler "
+                   "fired? process started? shell/pre-exec steps (redirects, "
+                   "permissions, working directory) succeeded? Only after a "
+                   "materialized run is confirmed may application-level health "
+                   "be interpreted. Do NOT diagnose collector regression from "
+                   "this record alone."),
+    },
     "SCHEDULER_INVOCATION_WITHOUT_WORK": {
         "category": "DEPLOYMENT_SCHEDULER_INSPECTION",
         "priority": "P1",

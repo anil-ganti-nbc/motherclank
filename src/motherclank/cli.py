@@ -18,6 +18,7 @@ from .adapters import AdapterPlaneUnavailable, build_adapters
 from . import snapshot as snap
 from . import synthesis as syn
 from . import continuity as cont
+from . import liveness as live
 from .drift import drift_row, DEFAULT_HETZNER_CHECKOUTS
 from .report import render_report, write_report, render_synthesis, render_anomalies, render_recommendations
 from . import anomalies as ano
@@ -116,6 +117,14 @@ def _load_continuity(var_dir: Path):
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
     return events
+
+
+def _load_liveness(var_dir: Path):
+    """Load the F6b execution-expectations registry if present."""
+    expectations, warnings = live.load_expectations(var_dir)
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    return expectations
 
 
 def _ingest_qc(args) -> int:
@@ -247,7 +256,9 @@ def _detect(args) -> int:
         print(f"no snapshots under {args.var_dir / 'snapshots'}", file=sys.stderr)
         return 5
     events = _load_continuity(args.var_dir)
-    found = ano.detect(history, continuity_events=events or None)
+    expectations = _load_liveness(args.var_dir)
+    found = ano.detect(history, continuity_events=events or None,
+                       liveness_expectations=expectations or None)
     batch = ano.build_batch(args.out, history, found)
     if args.dry_run:
         print(render_anomalies(batch))
@@ -271,8 +282,10 @@ def _synthesize(args) -> int:
         print(f"no snapshots found under {args.var_dir / 'snapshots'}", file=sys.stderr)
         return 5
     events = _load_continuity(args.var_dir)
+    expectations = _load_liveness(args.var_dir)
     synthesis = syn.synthesize_fleet(payload, stale_hours=args.stale_hours,
-                                     continuity_events=events or None)
+                                     continuity_events=events or None,
+                                     liveness_expectations=expectations or None)
     drift_rows = []
     if args.drift_checkouts:
         mapping = json.loads(args.drift_checkouts.read_text())
