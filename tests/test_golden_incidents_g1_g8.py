@@ -295,3 +295,24 @@ def test_registry_loader_tolerates_malformed_lines(tmp_path):
         json.dumps(good) + "\n{broken\n", encoding="utf-8")
     records, warnings = live.load_expectations(tmp_path)
     assert len(records) == 1 and len(warnings) == 1
+
+
+def test_grace_multiplier_is_per_expectation_not_universal_law():
+    """Reviewer constraint: x2 must not become universal. A lane may declare
+    its own grace; two lanes with identical cadence but different grace
+    reach MATERIALIZATION_GAP / EXECUTION_STALE at different instants."""
+    exp_fast = _expectation(clank_id="a", cadence_seconds=3600,
+                            grace_multiplier=1.1)
+    exp_slow = _expectation(clank_id="b", cadence_seconds=3600)  # default 2.0
+    # last run 75 minutes old: outside fast grace, within slow grace
+    block = _ok_block("2026-08-23T20:45:00Z")
+    at = "2026-08-23T22:00:00Z"
+    assert live.derive_liveness(
+        block, exp_fast, observed_at=at)["liveness_state"] == "EXECUTION_STALE"
+    assert live.derive_liveness(
+        block, exp_slow, observed_at=at)["liveness_state"] == "CURRENT"
+
+
+def test_invalid_grace_multiplier_rejected():
+    with pytest.raises(ValueError):
+        _expectation(clank_id="c", grace_multiplier=-1)

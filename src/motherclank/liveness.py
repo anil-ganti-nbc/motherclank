@@ -99,6 +99,9 @@ def validate_expectation(record: dict[str, Any]) -> list[str]:
     cadence = record.get("cadence_seconds")
     if cadence is not None and (not isinstance(cadence, (int, float)) or cadence <= 0):
         errors.append("cadence_seconds must be a positive number or null")
+    grace = record.get("grace_multiplier")
+    if grace is not None and (not isinstance(grace, (int, float)) or grace <= 0):
+        errors.append("grace_multiplier must be a positive number or null")
     expected_hash = record.get("content_hash")
     if expected_hash is not None and expected_hash != content_hash(record):
         errors.append("content_hash mismatch")
@@ -112,6 +115,8 @@ def make_expectation(**fields: Any) -> dict[str, Any]:
         "lane_id": fields.pop("lane_id", "UNKNOWN"),
         "authority": fields.pop("authority", "UNKNOWN"),
         "cadence_seconds": fields.pop("cadence_seconds", None),
+        # per-expectation liveness grace; no universal multiplier exists
+        "grace_multiplier": fields.pop("grace_multiplier", None),
         "active": fields.pop("active", True),
         "effective_end": fields.pop("effective_end", None),
         "notes": fields.pop("notes", ""),
@@ -266,7 +271,13 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
     if cadence is None:
         return result  # cannot judge windows without a declared cadence
 
-    window = float(cadence) * grace_multiplier
+    # Grace is PER-EXPECTATION, never universal law: a 30-minute timer and a
+    # four-times-daily run have different meaningful loss windows. Registry
+    # entries override the caller default; until per-lane calibration exists,
+    # gap/stale determinations are investigative signals, not alarms.
+    declared_grace = expectation.get("grace_multiplier")
+    window = float(cadence) * float(
+        declared_grace if declared_grace is not None else grace_multiplier)
     now = _parse(observed_at)
     run_ts, run_prov = _latest_run_ts(block)
     inv = _invocation_ts(block)
