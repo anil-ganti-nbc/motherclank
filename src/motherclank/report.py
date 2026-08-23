@@ -186,6 +186,6 @@ def render_recommendations(batch: dict[str, Any]) -> str:
             f"| {r0['status']} | {r0['priority']} | {r0['category']} "
             f"| {r0['clank_id']} | {r0['title'][:70]} | {cites[:110]} |"
         )
-        lines.append(f"|  |  |  |  | ↳ *{r0['recommended_action'][:120]}* |  |")
+        lines.append(f"|  |  |  |  | -> *{r0['recommended_action'][:120]}* |  |")
     lines.append("")
     return chr(10).join(lines)
