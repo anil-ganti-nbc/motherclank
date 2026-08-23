@@ -27,6 +27,14 @@ from . import soak
 
 
 def main(argv: list[str] | None = None) -> int:
+    # F4: bridge/report output contains non-ASCII markers; never let a
+    # platform legacy codec (e.g. cp1252) turn reporting into a crash.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
     parser = argparse.ArgumentParser(prog="motherclank")
     sub = parser.add_subparsers(dest="command", required=True)
     h = sub.add_parser("harvest", help="read-only fleet observation snapshot")
