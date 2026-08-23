@@ -63,7 +63,8 @@ def _source_rollup(health: dict[str, Any]) -> dict[str, int] | None:
 
 
 def synthesize_clank(clank_id: str, block: dict[str, Any],
-                     *, observed_at: str, stale_hours: float) -> dict[str, Any]:
+                     *, observed_at: str, stale_hours: float,
+                     continuity: dict[str, Any] | None = None) -> dict[str, Any]:
     evidence: list[str] = []
     state = "UNKNOWN"
 
@@ -149,18 +150,43 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
         state = "UNKNOWN"
         rules.append("R3")
 
-    return claim(state, sorted(set(rules)) or ["R6"])
+    claim_obj = claim(state, sorted(set(rules)) or ["R6"])
+    # F6: continuity is an ORTHOGONAL dimension. It never upgrades or
+    # downgrades the operational state; it qualifies what the operational
+    # state may be assumed to mean (a known data-loss interval must never
+    # read as uninterrupted HEALTHY history). Sources, in order: an explicit
+    # context argument (registry-derived), else a harvest-time annotation
+    # already carried on the snapshot block.
+    if continuity is None and isinstance(block.get("continuity"), dict):
+        continuity = block["continuity"]
+    if continuity is not None:
+        claim_obj["continuity"] = {
+            "continuity_state": continuity.get("continuity_state", "UNKNOWN_CONTINUITY"),
+            "epoch_id": continuity.get("epoch_id", "UNKNOWN"),
+            "active_event_ids": continuity.get("active_event_ids", []),
+            "evidence_refs": continuity.get("evidence_refs", []),
+            "orthogonal_to_operational_state": True,
+        }
+    return claim_obj
 
 
 def synthesize_fleet(snapshot_payload: dict[str, Any], *,
-                     stale_hours: float = 24.0) -> dict[str, Any]:
+                     stale_hours: float = 24.0,
+                     continuity_events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     clanks_out = {}
     counts = {s: 0 for s in STATES}
+    contexts: dict[str, dict[str, Any]] = {}
+    if continuity_events:
+        from . import continuity as cont
+        observed_at = snapshot_payload.get("harvested_at_utc", "")
+        for cid in snapshot_payload.get("clanks", {}):
+            contexts[cid] = cont.continuity_context(continuity_events, cid, observed_at)
     for cid in sorted(snapshot_payload.get("clanks", {})):
         result = synthesize_clank(
             cid, snapshot_payload["clanks"][cid],
             observed_at=snapshot_payload.get("harvested_at_utc", ""),
             stale_hours=stale_hours,
+            continuity=contexts.get(cid),
         )
         clanks_out[cid] = result
         counts[result["state"]] += 1
@@ -169,7 +195,7 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
     fleet_state = max(known_states, key=lambda s: _SEVERITY[s]) if known_states else "UNKNOWN"
     confidence = "FULL" if counts["UNKNOWN"] == 0 else "PARTIAL"
 
-    return {
+    payload = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "derived_label": "DERIVED fleet synthesis — Motherclank M1; downgrade-only",
         "synthesized_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -181,6 +207,12 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
         "clanks": clanks_out,
         "law9_drift": [],
     }
+    if continuity_events:
+        from . import continuity as cont
+        payload["continuity_registry_hash"] = (
+            snapshot_payload.get("continuity_registry_hash")
+            or cont.registry_hash(continuity_events))
+    return payload
 
 
 def attach_law9_drift(synthesis: dict[str, Any], drift_rows: list[dict[str, Any]]) -> None:

@@ -131,6 +131,7 @@ def build_snapshot(
     adapters_result: dict[str, Any],
     real_state_dir: Path,
     out_dir: Path,
+    continuity_events: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Return (snapshot_payload_without_content_hash, warnings)."""
     warnings: list[str] = []
@@ -141,6 +142,15 @@ def build_snapshot(
         adapter = adapters_result["adapters"][clank_id]
         ro_paths.append(Path(adapter.db_path))
         clanks_out[clank_id] = observe_clank(adapter)
+
+    # F6: annotate each block with the continuity context in force at harvest
+    # time (derive-time only; the registry itself stays append-only evidence).
+    if continuity_events:
+        from . import continuity as cont
+        harvested_at = datetime.now(UTC).isoformat(timespec="seconds")
+        for cid, block in clanks_out.items():
+            block["continuity"] = cont.continuity_context(continuity_events, cid,
+                                                          harvested_at)
 
     inv_text = inventory_path.read_text()
     inv_rev = _inventory_revision(inventory_path, inv_text)
@@ -159,6 +169,9 @@ def build_snapshot(
         "read_only_proof_total_changes": db_readonly_proof(ro_paths),
         "clanks": clanks_out,
     })
+    if continuity_events:
+        from . import continuity as cont
+        payload["continuity_registry_hash"] = cont.registry_hash(continuity_events)
     payload.update(payload_extra)
     payload["content_hash"] = content_hash(payload)
     for cid, block in clanks_out.items():

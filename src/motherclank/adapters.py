@@ -2,12 +2,28 @@
 
 The adapters live in the diagnostic-clank checkout (clank-fleet + clank-runtime
 packages; not on PyPI). We locate them as workspace siblings and import from
-there — no vendoring, no copying, so adapter evolution stays single-sourced.
+there - no vendoring, no copying, so adapter evolution stays single-sourced.
+
+F2 (architecture convergence): the set of onboarded Clanks is REGISTRY-driven,
+not hardcoded. A registry entry maps a clank_id to its adapter module/class
+and read-only DB copy name. Onboarding a manifest-complete observer Clank
+therefore requires ZERO edits to Motherclank source: supply a registry file.
+
+Registry resolution order:
+  1. explicit ``registry_path`` argument (or CLI --adapter-registry)
+  2. ``MOTHERCLANK_ADAPTER_REGISTRY`` environment variable
+  3. built-in default registry (the four validated Phase 2C Clanks)
+
+A registry file may EXTEND the builtin set (merge) when it contains
+``"extend_builtin": true``, or fully REPLACE it otherwise.
 """
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
+from typing import Any
 
 _REQUIRED = [
     ("clank_fleet.adapters.watch_clank", "WatchClankAdapter"),
@@ -15,6 +31,33 @@ _REQUIRED = [
     ("clank_fleet.adapters.korean_tech_wire", "KoreanTechWireAdapter"),
     ("clank_fleet.adapters.feature_phone", "FeaturePhoneAdapter"),
 ]
+
+BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
+    "watch-clank": {
+        "module": "clank_fleet.adapters.watch_clank",
+        "class": "WatchClankAdapter",
+        "db": "watch_clank.db",
+        "qc": True,
+    },
+    "smartphone-clank": {
+        "module": "clank_fleet.adapters.smartphone_clank",
+        "class": "SmartphoneClankAdapter",
+        "db": "smartphone_clank.db",
+        "qc": True,
+    },
+    "korean-tech-wire": {
+        "module": "clank_fleet.adapters.korean_tech_wire",
+        "class": "KoreanTechWireAdapter",
+        "db": "korean_tech_wire.db",
+        "qc": True,
+    },
+    "feature-phone-clank": {
+        "module": "clank_fleet.adapters.feature_phone",
+        "class": "FeaturePhoneAdapter",
+        "db": "feature_phone_clank.db",
+        "qc": False,
+    },
+}
 
 
 class AdapterPlaneUnavailable(RuntimeError):
@@ -51,21 +94,61 @@ def ensure_adapter_plane(diagnostic_clank_path: Path | None = None) -> None:
     )
 
 
-def build_adapters(real_state_dir: Path) -> dict[str, object]:
-    """Instantiate the four onboarded adapters against read-only DB copies."""
-    ensure_adapter_plane()
-    from clank_fleet.adapters.feature_phone import FeaturePhoneAdapter  # noqa: PLC0415
-    from clank_fleet.adapters.korean_tech_wire import KoreanTechWireAdapter  # noqa: PLC0415
-    from clank_fleet.adapters.smartphone_clank import SmartphoneClankAdapter  # noqa: PLC0415
-    from clank_fleet.adapters.watch_clank import WatchClankAdapter  # noqa: PLC0415
+def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str, Any]]:
+    """Load the effective adapter registry. Malformed overrides fail loudly:
+    silent partial onboarding would violate the honesty contract."""
+    registry = {cid: dict(entry) for cid, entry in BUILTIN_REGISTRY.items()}
+    path = registry_path or os.environ.get("MOTHERCLANK_ADAPTER_REGISTRY")
+    if not path:
+        return registry
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError:
+        import yaml  # optional dependency, consistent with inventory loading
+        doc = yaml.safe_load(text)
+    if not isinstance(doc, dict):
+        raise AdapterPlaneUnavailable(f"adapter registry must be a mapping: {path}")
+    extend = bool(doc.pop("extend_builtin", True))
+    if not extend:
+        registry.clear()
+    for cid, entry in doc.items():
+        if not isinstance(cid, str) or not isinstance(entry, dict):
+            raise AdapterPlaneUnavailable(f"invalid registry row: {cid!r}")
+        for field in ("module", "class", "db"):
+            if not entry.get(field):
+                raise AdapterPlaneUnavailable(
+                    f"registry row {cid!r} missing required field {field!r}")
+        registry[str(cid)] = {
+            "module": entry["module"],
+            "class": entry["class"],
+            "db": entry["db"],
+            "qc": bool(entry.get("qc", False)),
+        }
+    return registry
+
+
+def build_adapters(real_state_dir: Path,
+                   diagnostic_clank_path: Path | None = None,
+                   registry_path: Path | str | None = None) -> dict[str, object]:
+    """Instantiate every registered observer adapter against read-only DB copies."""
+    ensure_adapter_plane(diagnostic_clank_path)
+    registry = load_registry(registry_path)
+    if not registry:
+        raise AdapterPlaneUnavailable("effective adapter registry is empty")
+    d = real_state_dir
+    adapters: dict[str, Any] = {}
+    qc_ids: list[str] = []
+    versions: dict[str, Any] = {}
     from clank_runtime.version import ADAPTER_CONTRACT_VERSION  # noqa: PLC0415
 
-    d = real_state_dir
-    adapters = {
-        "watch-clank": WatchClankAdapter(db_path=d / "watch_clank.db"),
-        "smartphone-clank": SmartphoneClankAdapter(db_path=d / "smartphone_clank.db"),
-        "korean-tech-wire": KoreanTechWireAdapter(db_path=d / "korean_tech_wire.db"),
-        "feature-phone-clank": FeaturePhoneAdapter(db_path=d / "feature_phone_clank.db"),
-    }
+    for cid in sorted(registry):
+        entry = registry[cid]
+        module = __import__(entry["module"], fromlist=[entry["class"]])
+        cls = getattr(module, entry["class"])
+        adapters[cid] = cls(db_path=d / entry["db"])
+        if entry.get("qc"):
+            qc_ids.append(cid)
+
     versions = {"adapter_contract_version": ADAPTER_CONTRACT_VERSION}
-    return {"adapters": adapters, "versions": versions}
+    return {"adapters": adapters, "versions": versions, "qc_adapters": qc_ids}

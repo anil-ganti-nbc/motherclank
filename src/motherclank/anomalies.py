@@ -69,11 +69,17 @@ def _mk(anomaly_type: str, severity: str, clank_id: str, subject: str,
     }
 
 
-def detect(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def detect(snapshots: list[dict[str, Any]],
+           continuity_events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Derive the full anomaly ledger from ordered M0 snapshots.
 
     Deterministic replay: same input list => same output list. The wall clock
     is never consulted; all timestamps come from snapshot harvested_at fields.
+
+    F6: when a continuity registry is supplied, known destructive events are
+    (a) emitted as explicit CONTINUITY_EVENT records instead of being read as
+    organic source transitions, and (b) used to QUALIFY anomalies derived
+    from observations inside a discontinuity window.
     """
     # stable ordering by harvest time, then content hash for ties
     snaps = sorted(snapshots,
@@ -218,6 +224,19 @@ def detect(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for a in out:
         a["chain_hash"] = "sha256:" + hashlib.sha256(
             json.dumps(a, sort_keys=True, default=str).encode()).hexdigest()
+    if continuity_events:
+        from . import continuity as cont
+        incidents = cont.incident_records(continuity_events)
+        qualified = cont.qualify_anomalies(out, snaps, continuity_events)
+        # Incidents sort alongside; qualification is additive evidence only.
+        combined: dict[str, dict[str, Any]] = {a["chain_hash"]: a for a in qualified}
+        for inc in incidents:
+            existing = combined.get(inc["chain_hash"])
+            if existing is not None:
+                continue
+            combined[inc["chain_hash"]] = inc
+        return sorted(combined.values(),
+                      key=lambda a: (a["type"], a["clank_id"], a["subject"]))
     return out
 
 

@@ -86,6 +86,17 @@ _RULES: dict[str, dict[str, str]] = {
         "action": ("Review the cited per-source anomalies below; they fully explain "
                    "this fleet-level signal."),
     },
+    # F6: known continuity incidents surface as watch-only records citing the
+    # incident — never as upstream-collector repair instructions.
+    "CONTINUITY_EVENT": {
+        "category": "NO_ACTION_WATCH",
+        "priority": "P3",
+        "title": "Known observational discontinuity on {clank} ({subject})",
+        "action": ("A registered continuity event explains observations for "
+                   "{clank} during this window. Do NOT interpret pre/post-incident "
+                   "differences as organic source behaviour; see the cited "
+                   "continuity evidence."),
+    },
 }
 
 _RECOVERED_TYPES_AUTONOMOUS = {"STALE_RUN"}  # closed episodes become watch items
@@ -98,7 +109,7 @@ def _rid(rule_key: str, clank_id: str, subject_group: str) -> str:
 
 def _cite(a: dict[str, Any]) -> dict[str, Any]:
     latest = (a.get("evidence") or [{}])[-1]
-    return {
+    citation = {
         "anomaly_id": a["anomaly_id"],
         "type": a["type"],
         "severity": a["severity"],
@@ -107,6 +118,13 @@ def _cite(a: dict[str, Any]) -> dict[str, Any]:
         "last_seen": a["last_seen"],
         "latest_evidence": latest.get("detail", ""),
     }
+    # F6: carry continuity qualification into citations so recommendations
+    # name the explaining incident instead of implying organic behaviour.
+    if a.get("continuity_qualified"):
+        citation["continuity_qualified"] = True
+        citation["continuity_state"] = a.get("continuity_state", "")
+        citation["continuity_event_ids"] = a.get("continuity_event_ids", [])
+    return citation
 
 
 def derive_recommendations(anomaly_batch: dict[str, Any]) -> list[dict[str, Any]]:
@@ -188,6 +206,13 @@ def derive_recommendations(anomaly_batch: dict[str, Any]) -> list[dict[str, Any]
                                                   anomaly.get("first_seen"))))
         if not any(c["anomaly_id"] == citation["anomaly_id"] for c in targets):
             targets.append(citation)
+
+        # F6: continuity-incident recommendations track their own OPEN/CLOSED
+        # state and are exempt from organic active/recovered re-evaluation.
+        if atype == "CONTINUITY_EVENT":
+            rec["status"] = "ACTIVE" if lifecycle == "OPEN" else "CLOSED"
+            out[rid] = rec
+            continue
 
         # lifecycle re-evaluation: closed only when every citation is recovered
         active_siblings = [c for c in rec["cited_anomalies"]]

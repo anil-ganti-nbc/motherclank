@@ -17,6 +17,7 @@ from pathlib import Path
 from .adapters import AdapterPlaneUnavailable, build_adapters
 from . import snapshot as snap
 from . import synthesis as syn
+from . import continuity as cont
 from .drift import drift_row, DEFAULT_HETZNER_CHECKOUTS
 from .report import render_report, write_report, render_synthesis, render_anomalies, render_recommendations
 from . import anomalies as ano
@@ -33,7 +34,9 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--real-state", required=True, type=Path,
                    help="directory holding read-only DB copies (watch_clank.db, ...)")
     h.add_argument("--adapters-src", type=Path, default=None,
-                   help="path to diagnostic-clank checkout if not a workspace sibling")
+                    help="path to diagnostic-clank checkout if not a workspace sibling")
+    h.add_argument("--adapter-registry", type=Path, default=None,
+                    help="optional adapter registry file (JSON/YAML); extends builtin set")
     h.add_argument("--out", type=Path, default=Path("var"), help="output directory")
     h.add_argument("--dry-run", action="store_true",
                    help="compute and print; write nothing")
@@ -64,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--var-dir", required=True, type=Path)
     q.add_argument("--out", type=Path, default=Path("var"))
     q.add_argument("--adapters-src", type=Path, default=None)
+    q.add_argument("--adapter-registry", type=Path, default=None)
     q.add_argument("--dry-run", action="store_true")
     sr = sub.add_parser("soak-report", help="periodic QC-soak report + M5 gate scoring (Axis B)")
     sr.add_argument("--var-dir", required=True, type=Path)
@@ -71,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("--as-of", type=str, default=None,
                     help="ISO timestamp anchor; defaults to latest batch")
     sr.add_argument("--dry-run", action="store_true")
+    cv = sub.add_parser("validate-continuity",
+                        help="read-only validation of the append-only continuity registry")
+    cv.add_argument("--var-dir", required=True, type=Path)
     args = parser.parse_args(argv)
 
     if args.command == "harvest":
@@ -85,12 +92,28 @@ def main(argv: list[str] | None = None) -> int:
         return _ingest_qc(args)
     if args.command == "soak-report":
         return _soak_report(args)
+    if args.command == "validate-continuity":
+        events, warnings = cont.load_events(args.var_dir)
+        for w in warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        print(f"continuity registry: {len(events)} valid event(s), "
+              f"registry_hash={cont.registry_hash(events) if events else 'empty'}")
+        return 1 if warnings else 0
     return 2
+
+
+def _load_continuity(var_dir: Path):
+    """Load the F6 continuity registry if present; surface warnings honestly."""
+    events, warnings = cont.load_events(var_dir)
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    return events
 
 
 def _ingest_qc(args) -> int:
     try:
-        built = build_adapters(args.real_state)
+        built = build_adapters(args.real_state,
+                               registry_path=args.adapter_registry)
     except AdapterPlaneUnavailable as exc:
         print(f"adapter plane unavailable: {exc}", file=sys.stderr)
         return 4
@@ -101,8 +124,8 @@ def _ingest_qc(args) -> int:
         or datetime.now(UTC).isoformat(timespec="seconds")
     previous = qc.read_previous_qc_batch(args.out)
     blocks = {}
-    for cid in ("watch-clank", "smartphone-clank", "korean-tech-wire"):
-        adapter = built["adapters"].get(cid)
+    for cid in built["qc_adapters"]:
+        adapter = built["adapters"][cid]
         blocks[cid] = qc.ingest_clank(cid, adapter,
                                       ingestion_snapshot_hash=snap_hash)
     payload, warnings = qc.build_corpus(previous, blocks,
@@ -215,7 +238,8 @@ def _detect(args) -> int:
     if not history:
         print(f"no snapshots under {args.var_dir / 'snapshots'}", file=sys.stderr)
         return 5
-    found = ano.detect(history)
+    events = _load_continuity(args.var_dir)
+    found = ano.detect(history, continuity_events=events or None)
     batch = ano.build_batch(args.out, history, found)
     if args.dry_run:
         print(render_anomalies(batch))
@@ -238,7 +262,9 @@ def _synthesize(args) -> int:
     if payload is None:
         print(f"no snapshots found under {args.var_dir / 'snapshots'}", file=sys.stderr)
         return 5
-    synthesis = syn.synthesize_fleet(payload, stale_hours=args.stale_hours)
+    events = _load_continuity(args.var_dir)
+    synthesis = syn.synthesize_fleet(payload, stale_hours=args.stale_hours,
+                                     continuity_events=events or None)
     drift_rows = []
     if args.drift_checkouts:
         mapping = json.loads(args.drift_checkouts.read_text())
@@ -274,7 +300,8 @@ def _harvest(args) -> int:
         print(f"inventory missing: {args.inventory}", file=sys.stderr)
         return 3
     try:
-        built = build_adapters(args.real_state)
+        built = build_adapters(args.real_state,
+                               registry_path=getattr(args, "adapter_registry", None))
     except AdapterPlaneUnavailable as exc:
         print(f"adapter plane unavailable: {exc}", file=sys.stderr)
         return 4
@@ -284,6 +311,7 @@ def _harvest(args) -> int:
         adapters_result=built,
         real_state_dir=args.real_state,
         out_dir=args.out,
+        continuity_events=_load_continuity(args.out) or None,
     )
 
     if args.dry_run:
