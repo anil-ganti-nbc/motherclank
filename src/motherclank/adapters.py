@@ -69,13 +69,23 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
     },
     # Hot-swap specimen lane (observer expansion phase): onboarded via this
     # data row alone. No Motherclank core module references OEM Radar.
-    # db filename pending operator confirmation of the staging store's
-    # inner path ("data/" WAL store); harvest yields UNKNOWN-honest blocks
-    # until the real-state copy exists.
+    # db filename matches the operator-verified real-state copy produced by
+    # scripts/refresh-real-state.sh (inner file is radar.db, NOT oem_radar.db
+    # - resource naming is not identity).
     "oem-radar": {
         "module": "clank_fleet.adapters.oem_radar",
         "class": "OemRadarAdapter",
-        "db": "radar.db",  # operator-confirmed 2026-08-24; see refresh-real-state.sh
+        "db": "radar.db",
+        "qc": False,
+    },
+    # Observer expansion phase: onboarded via this data row alone.
+    # db filename pending operator confirmation (FGT store lives in a
+    # container volume; inner name not yet live-verified - never guessed,
+    # per the incident record).
+    "free-game-tracker": {
+        "module": "clank_fleet.adapters.free_game_tracker",
+        "class": "FreeGameTrackerAdapter",
+        "db": "free_game_tracker.db",
         "qc": False,
     },
 }
