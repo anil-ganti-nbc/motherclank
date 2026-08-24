@@ -329,6 +329,27 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
     run_age = age(run_dt)
     inv_age = age(inv_dt)
 
+    # P-4.3 semantic-clock discipline: a scheduler invocation timestamp and
+    # a participant run timestamp come from different clocks. Comparing them
+    # is legitimate for ordering, but the comparison must be VISIBLE.
+    run_clock = str((block.get("last_run") or {}).get(
+        "clock", "native_run_row")) if (block.get("last_run") or {}) \
+        else "none"
+    trace_clock = str((trace or {}).get("clock", "scheduler_invocation")) \
+        if trace else None
+    cross_clock = (
+        trace_clock is not None and run_clock not in ("none", "UNKNOWN")
+        and trace_clock != run_clock)
+
+    def _annotate_cross_clock(evidence: dict[str, Any]) -> None:
+        if cross_clock:
+            evidence["cross_clock_comparison"] = {
+                "run_clock": run_clock,
+                "trace_clock": trace_clock,
+                "note": ("ordering across semantic clocks; timestamps are "
+                         "not interchangeable"),
+            }
+
     def _apply_trace_stages(tr: dict[str, Any]) -> None:
         from . import scheduler_traces as straces
         if result["stages"].get("SCHEDULER_FIRED", {}).get("value") == "YES":
@@ -441,6 +462,7 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
                                        "store; persistence/materialization "
                                        "failure class"),
                 }
+                _annotate_cross_clock(result["evidence"])
                 result["stages"]["RUN_MATERIALIZED"] = {
                     "value": "NO",
                     "provenance": "mandatory materialization policy; app "

@@ -226,6 +226,26 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
         clanks_out[cid] = result
         counts[result["state"]] += 1
 
+    # P-4.3: typed evidence envelopes flow through the generic consumer
+    # registry. Known types with registered consumers yield derived claims;
+    # unknown/malformed/unsupported-major evidence stays visible WITHOUT
+    # producing any invented claim.
+    envelopes: list[dict[str, Any]] = []
+    for block in snapshot_payload.get("clanks", {}).values():
+        raw = block.get("evidence_envelopes")
+        if isinstance(raw, list):
+            envelopes.extend(e for e in raw if isinstance(e, dict))
+    evidence_derivation = None
+    if envelopes:
+        from . import evidence as ev
+        derivation = ev.consume_all(envelopes)
+        evidence_derivation = derivation
+        for claim in derivation.get("derived_claims", []):
+            cid = (claim.get("subject") or {}).get("clank_id")
+            if cid in clanks_out:
+                clanks_out[cid].setdefault("evidence_derived_claims", []) \
+                    .append(claim)
+
     known_states = [c["state"] for c in clanks_out.values() if c["state"] != "UNKNOWN"]
     fleet_state = max(known_states, key=lambda s: _SEVERITY[s]) if known_states else "UNKNOWN"
     confidence = "FULL" if counts["UNKNOWN"] == 0 else "PARTIAL"
@@ -247,6 +267,14 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
         payload["continuity_registry_hash"] = (
             snapshot_payload.get("continuity_registry_hash")
             or cont.registry_hash(continuity_events))
+    if evidence_derivation is not None:
+        payload["evidence_derivation"] = {
+            "derived_claim_count": len(evidence_derivation.get(
+                "derived_claims", [])),
+            "unknown_evidence": evidence_derivation.get("unknown_evidence",
+                                                        []),
+            "observed_envelope_count": evidence_derivation.get("count", 0),
+        }
     return payload
 
 

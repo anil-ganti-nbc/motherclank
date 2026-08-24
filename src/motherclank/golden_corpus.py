@@ -325,3 +325,144 @@ def ids() -> tuple[str, ...]:
 
 def get(gic_id: str) -> dict | None:
     return next((e for e in ENTRIES if e["id"] == gic_id), None)
+
+# ---- P-4.3 additions: evidence semantics / lane configuration -------------
+
+ENTRIES += (
+    {"id": "GIC-26", "title": "native run timestamp vs derived activity "
+              "timestamp", "plane": "semantic clocks",
+     "evidence_shape": "MAX(derived) vs native run row for the same lane",
+     "expected": ["clock labels distinguish DERIVED_ACTIVITY_MAX from "
+                  "native_run_row"],
+     "forbidden": ["interchangeable comparison without annotation"],
+     "provenance": "last_run.clock + derived_from",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic26_native_run_vs_derived_activity_are_labeled"],
+     "origin": "v0.3 audit of last_run overload"},
+    {"id": "GIC-27", "title": "scheduler time compared with participant time",
+     "plane": "semantic clocks",
+     "evidence_shape": "trace invoked_at vs participant run timestamp",
+     "expected": ["ordering allowed with visible cross_clock_comparison "
+                  "annotation"],
+     "forbidden": ["silent treatment as one clock"],
+     "provenance": "trace.clock + last_run.clock",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic27_cross_clock_comparison_is_annotated_not_"
+                    "silent"],
+     "origin": "P-4 persistence-gap derivation"},
+    {"id": "GIC-28", "title": "unknown evidence type", "plane": "evidence",
+     "evidence_shape": "envelope with unregistered evidence_type",
+     "expected": ["visible in unknown_evidence; zero derived claims"],
+     "forbidden": ["invented claims", "observation abort"],
+     "provenance": "envelope content hash",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic28_unknown_evidence_type_is_visible_and_claim_"
+                    "free"],
+     "origin": "v0.3 forward-compatibility requirement"},
+    {"id": "GIC-29", "title": "unsupported evidence major", "plane": "evidence",
+     "evidence_shape": "registered type, newer major version",
+     "expected": ["UNSUPPORTED_MAJOR listing supported majors; claim-free"],
+     "forbidden": ["best-effort parsing of unknown shapes"],
+     "provenance": "type registry majors",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic29_unsupported_major_is_visible_and_claim_free"],
+     "origin": "v0.3 versioning requirement"},
+    {"id": "GIC-30", "title": "malformed known-type payload", "plane": "evidence",
+     "evidence_shape": "known type/major, payload violates schema",
+     "expected": ["KNOWN_PAYLOAD_INVALID with violations"],
+     "forbidden": ["partial claims from invalid payloads"],
+     "provenance": "type validator output",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic30_malformed_known_payload_is_visible_and_claim_"
+                    "free"],
+     "origin": "capability-validation precedent"},
+    {"id": "GIC-31", "title": "contradictory lane identity", "plane": "lane config",
+     "evidence_shape": "one instance_id claimed by two clanks",
+     "expected": ["conflict detected at configuration level"],
+     "forbidden": ["cross-contaminated health/dedup"],
+     "provenance": "lane-config identity sweep",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic31_contradictory_lane_identity_detected"],
+     "origin": "registry duplicate-store lesson"},
+    {"id": "GIC-32", "title": "declaration without observation",
+     "plane": "config/observation separation",
+     "evidence_shape": "PERIODIC expectation, empty harvest",
+     "expected": ["no fired/executed/materialized claims anywhere"],
+     "forbidden": ["configuration manufacturing observations"],
+     "provenance": "expectations registry only",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic32_declaration_alone_never_manufactures_"
+                    "observation"],
+     "origin": "ADR-0008/0011 boundary"},
+    {"id": "GIC-33", "title": "observation contradicting declaration",
+     "plane": "config/observation separation",
+     "evidence_shape": "no_work_due trace against ALWAYS policy lane",
+     "expected": ["derivation may qualify; declaration object unchanged"],
+     "forbidden": ["observations silently rewriting policy"],
+     "provenance": "immutable expectation record",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic33_observation_never_rewrites_declaration"],
+     "origin": "P-4.1 OEM false-gap root cause"},
+    {"id": "GIC-34", "title": "multi-cadence lane stays multi-cadence",
+     "plane": "lane config",
+     "evidence_shape": "cadence null + multi_cadence true",
+     "expected": ["config valid; no single cadence invented"],
+     "forbidden": ["placeholder cadence values"],
+     "provenance": "operator-verified seed migration",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic34_multi_cadence_config_stays_multi_cadence"],
+     "origin": "smartphone/watch/feature-phone lanes"},
+    {"id": "GIC-35", "title": "large collector expansion, zero core edits",
+     "plane": "hot-swap boundary",
+     "evidence_shape": "census envelope scaling 3 -> 18 collectors",
+     "expected": ["identical observer handling at any scale"],
+     "forbidden": ["brand/collector tokens in Motherclank core"],
+     "provenance": "collector_census envelope",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic35_watch_collector_expansion_zero_core_edits"],
+     "origin": "Watch expansion programme dogfood"},
+    {"id": "GIC-36", "title": "new evidence primitive via extension path",
+     "plane": "evidence extension",
+     "evidence_shape": "runtime type+consumer registration, new payload shape",
+     "expected": ["derived claim produced through public API only"],
+     "forbidden": ["core edits for participant-specific semantics"],
+     "provenance": "type registry + consumer output",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic36_new_evidence_primitive_without_participant_"
+                    "core_edits"],
+     "origin": "v0.3 extension-path proof"},
+    {"id": "GIC-37", "title": "fresh observer time over stale occurrence",
+     "plane": "semantic clocks",
+     "evidence_shape": "observed_at now, occurred_at weeks old",
+     "expected": ["both timestamps preserved verbatim; staleness not "
+                  "laundered"],
+     "forbidden": ["occurred_at overwritten by ingestion time"],
+     "provenance": "envelope dual timestamps",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic37_fresh_observer_time_never_launders_stale_"
+                    "occurrence"],
+     "origin": "GIC-03 generalization"},
+    {"id": "GIC-38", "title": "event time newer than ingestion (clock anomaly)",
+     "plane": "semantic clocks",
+     "evidence_shape": "occurred_at after observed_at",
+     "expected": ["anomaly preserved verbatim for downstream consumers"],
+     "forbidden": ["silent normalization of impossible clocks"],
+     "provenance": "envelope dual timestamps",
+     "status": "executable",
+     "covered_by": ["tests/test_p43_evidence.py::"
+                    "test_gic38_event_time_newer_than_ingestion_flagged_"
+                    "verbatim"],
+     "origin": "distributed-host reality"},
+)

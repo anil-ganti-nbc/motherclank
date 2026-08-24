@@ -83,7 +83,7 @@ def observe_clank(adapter: Any) -> dict[str, Any]:
 
     for extra in ("event_summary", "delivery_summary", "qc_summary",
                   "source_lifecycle", "timeline_taxonomy", "schema_revision",
-                  "current_epoch", "capability_states"):
+                  "current_epoch", "capability_states", "evidence_envelopes"):
         if not hasattr(adapter, extra):
             continue
         try:
