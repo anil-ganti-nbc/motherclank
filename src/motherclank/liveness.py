@@ -275,17 +275,16 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
         result["notes"] = "finite-soak policy: cadence enforcement not applied"
         return result
 
-    cadence = expectation.get("cadence_seconds")
-    if cadence is None:
-        return result  # cannot judge windows without a declared cadence
-
     # Grace is PER-EXPECTATION, never universal law: a 30-minute timer and a
     # four-times-daily run have different meaningful loss windows. Registry
     # entries override the caller default; until per-lane calibration exists,
     # gap/stale determinations are investigative signals, not alarms.
     declared_grace = expectation.get("grace_multiplier")
-    window = float(cadence) * float(
-        declared_grace if declared_grace is not None else grace_multiplier)
+    cadence = expectation.get("cadence_seconds")
+    window = None
+    if cadence is not None:
+        window = float(cadence) * float(
+            declared_grace if declared_grace is not None else grace_multiplier)
     now = _parse(observed_at)
     run_ts, run_prov = _latest_run_ts(block)
     inv = _invocation_ts(block)
@@ -300,67 +299,91 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
     run_age = age(run_dt)
     inv_age = age(inv_dt)
 
-    # P-4: scheduler-trace evidence (Diagnostic-Clank probe plane) takes
-    # precedence over absence-of-run inference wherever it exists.
-    if trace is not None:
+    def _apply_trace_stages(tr: dict[str, Any]) -> None:
         from . import scheduler_traces as straces
+        if result["stages"].get("SCHEDULER_FIRED", {}).get("value") == "YES":
+            return  # block-level invocation evidence already positive
+        fired = straces.stage_evidence(tr)
+        for stage_name, value in fired.items():
+            result["stages"][stage_name] = {
+                "value": value,
+                "provenance": f"scheduler trace {tr.get('trace_id', '?')} "
+                              f"({tr.get('evidence_source') or 'unspecified'} "
+                              f"source)",
+            }
+
+    # P-4: scheduler-trace evidence (Diagnostic-Clank probe plane) takes
+    # precedence over absence-of-run inference wherever it exists. Stage
+    # evidence applies for ANY periodic lane regardless of declared cadence;
+    # state escalation bounds differ by whether a cadence window is known.
+    if trace is not None:
         trace_inv = _parse(trace.get("invoked_at")) \
             if trace.get("invoked_at") else None
         trace_age = age(trace_inv)
-        if result["stages"].get("SCHEDULER_FIRED", {}).get("value") != "YES":
-            fired = straces.stage_evidence(trace)
-            for stage_name, value in fired.items():
-                result["stages"][stage_name] = {
-                    "value": value,
-                    "provenance": f"scheduler trace {trace.get('trace_id', '?')} "
-                                  f"({trace.get('evidence_source') or 'unspecified'} "
-                                  f"source)",
-                }
-        if trace_inv is not None and trace_age is not None and trace_age <= window:
-            ps = trace.get("process_started")
-            if ps is False:
-                # positive pre-exec failure: fire observed, process start
-                # positively absent. The canonical August-22 shape.
-                result["liveness_state"] = "MATERIALIZATION_GAP"
-                result["evidence"] = {
-                    "basis": "scheduler_trace",
-                    "trace_id": trace.get("trace_id"),
-                    "trace_invocation_age_seconds": trace_age,
-                    "process_started": False,
-                    "interpretation": ("scheduler fire positively observed; "
-                                       "process start positively absent; "
-                                       "pre-exec failure class; application "
-                                       "logic never executed"),
-                }
-                for stage_name, prov in (
-                        ("RUN_MATERIALIZED",
-                         "implied by trace: no process started"),
-                        ("RUN_COMPLETED",
-                         "implied by trace: no process started"),
-                        ("OUTCOME_RECORDED",
-                         "implied by trace: no process started")):
-                    result["stages"][stage_name] = {"value": "NO",
-                                                    "provenance": prov}
-                return result
-            if ps is True and (run_dt is None or trace_inv > run_dt):
-                # fire + process start observed, but no newer run row:
-                # failure between process start and persistence.
-                result["liveness_state"] = "MATERIALIZATION_GAP"
-                result["evidence"] = {
-                    "basis": "scheduler_trace",
-                    "trace_id": trace.get("trace_id"),
-                    "trace_invocation_age_seconds": trace_age,
-                    "process_started": True,
-                    "interpretation": ("process started per probe evidence but "
-                                       "no newer run materialized in the "
-                                       "application store; failed before/at "
-                                       "persistence"),
-                }
-                result["stages"]["RUN_MATERIALIZED"] = {
-                    "value": "NO",
-                    "provenance": "trace shows process start; app store has no "
-                                  "newer run row"}
-                return result
+        _apply_trace_stages(trace)
+        ps = trace.get("process_started")
+        inv_newer_than_run = (trace_inv is not None
+                              and (run_dt is None or trace_inv > run_dt))
+        bounded_fresh = (window is not None and trace_age is not None
+                         and trace_age <= window)
+        if ps is False and inv_newer_than_run and (
+                window is None or bounded_fresh):
+            # positive pre-exec failure: fire observed, process start
+            # positively absent. The canonical August-22 shape. With no
+            # declared cadence this still stands on its own: an expected-
+            # execution lane whose scheduler provably fired without starting
+            # the process is anomalous at any observation horizon.
+            result["liveness_state"] = "MATERIALIZATION_GAP"
+            result["evidence"] = {
+                "basis": "scheduler_trace",
+                "trace_id": trace.get("trace_id"),
+                "trace_invocation_age_seconds": trace_age,
+                "process_started": False,
+                "cadence_bounded": window is not None,
+                "interpretation": ("scheduler fire positively observed; "
+                                   "process start positively absent; "
+                                   "pre-exec failure class; application "
+                                   "logic never executed"),
+            }
+            for stage_name, prov in (
+                    ("RUN_MATERIALIZED",
+                     "implied by trace: no process started"),
+                    ("RUN_COMPLETED",
+                     "implied by trace: no process started"),
+                    ("OUTCOME_RECORDED",
+                     "implied by trace: no process started")):
+                result["stages"][stage_name] = {"value": "NO",
+                                                "provenance": prov}
+            return result
+        if ps is True and inv_newer_than_run and bounded_fresh:
+            # fire + process start observed within the known window, but no
+            # newer run row: failure between process start and persistence.
+            result["liveness_state"] = "MATERIALIZATION_GAP"
+            result["evidence"] = {
+                "basis": "scheduler_trace",
+                "trace_id": trace.get("trace_id"),
+                "trace_invocation_age_seconds": trace_age,
+                "process_started": True,
+                "cadence_bounded": True,
+                "interpretation": ("process started per probe evidence but "
+                                   "no newer run materialized in the "
+                                   "application store; failed before/at "
+                                   "persistence"),
+            }
+            result["stages"]["RUN_MATERIALIZED"] = {
+                "value": "NO",
+                "provenance": "trace shows process start; app store has no "
+                              "newer run row"}
+            return result
+        # ps True without a cadence bound, or stale trace: stages updated,
+        # state judgment deferred to the cadence logic below (or UNKNOWN).
+
+    if cadence is None:
+        # multi-cadence lane: per-window currency/gap judgments are impossible
+        # without inventing a window, but positive trace stages above remain.
+        result["notes"] = ("multi-cadence lane: liveness_state requires a "
+                           "declared cadence; trace stage evidence retained")
+        return result
 
     if run_age is not None and run_age <= window:
         result["liveness_state"] = "CURRENT"

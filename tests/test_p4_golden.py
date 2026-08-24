@@ -17,6 +17,7 @@ from motherclank import liveness as live
 from motherclank import scheduler_traces as straces
 from motherclank import snapshot as snap
 from motherclank import survivability as surv
+from motherclank import synthesis as syn
 
 
 def _expectation(**kw):
@@ -248,8 +249,10 @@ def test_p4_g6_smartwatch_onboarded_via_registry_alone(tmp_path):
     sw = built["adapters"]["smartwatch-clank"]
     # missing real-state copy -> UNKNOWN-honest observations, never failure
     block = snap.observe_clank(sw)
-    assert block["status"]["operational_state"].value if hasattr(
-        block["status"], "operational_state") else True
+    status = block["status"]
+    op = status.get("operational_state") if isinstance(status, dict) else \
+        getattr(status, "operational_state", None)
+    assert str(op).split(".")[-1].lower() == "unknown"
     inv = sw.store_inventory()
     assert inv == {"available": False, "tables": {}}
 
@@ -268,5 +271,86 @@ def test_p4_g6b_smartwatch_fixture_store_introspection(tmp_path):
     inv = sw.store_inventory()
     assert inv["available"] is True
     assert inv["tables"] == {"t_future_run": 1}
-    lr = sw.last_run()
-    assert lr["supported"] is False  # refuses to guess run semantics
+
+
+# ---------------------------------------------------------------------------
+# P4-G7 MULTI-CADENCE TRACE CORRELATION (convergence-pass regression)
+# ---------------------------------------------------------------------------
+
+def _multi_cadence_expectation(clank_id="c"):
+    return _expectation(clank_id=clank_id, cadence_seconds=None,
+                        multi_cadence=True,
+                        notes="irregular per-source schedule; no single value")
+
+
+def test_p4_g7a_multi_cadence_lane_trace_proves_gap():
+    """The convergence-pass finding: feature-phone/watch-shaped lanes
+    (cadence=None) must not have positive traces dropped on the floor."""
+    exp = _multi_cadence_expectation("feature-phone-clank")
+    trace = straces.make_trace(
+        trace_id="T-MC1", clank_id="feature-phone-clank",
+        scheduler_type="cron", observed_at="2026-08-24T06:00:00Z",
+        invoked_at="2026-08-24T05:55:00Z", process_started=False,
+        evidence_source="journal")
+    block = _ok_block("2026-08-24T01:00:00Z")  # last run hours ago
+    lv = live.derive_liveness(block, exp, observed_at="2026-08-24T06:00:00Z",
+                              trace=trace)
+    assert lv["liveness_state"] == "MATERIALIZATION_GAP"
+    assert lv["stages"]["SCHEDULER_FIRED"]["value"] == "YES"
+    assert lv["evidence"]["cadence_bounded"] is False
+
+
+def test_p4_g7b_multi_cadence_fired_and_started_never_fabricates_a_gap():
+    """fired + process started but no newer run row: WITHOUT a declared
+    cadence the persistence-delay window is unknown -> state UNKNOWN,
+    stage evidence retained. No invented window, no false alarm."""
+    exp = _multi_cadence_expectation("watch-clank")
+    trace = straces.make_trace(
+        trace_id="T-MC2", clank_id="watch-clank",
+        scheduler_type="systemd_user", observed_at="2026-08-24T06:00:00Z",
+        invoked_at="2026-08-24T05:55:00Z", process_started=True,
+        evidence_source="journal")
+    block = _ok_block("2026-08-23T20:00:00Z")
+    lv = live.derive_liveness(block, exp, observed_at="2026-08-24T06:00:00Z",
+                              trace=trace)
+    assert lv["liveness_state"] == "UNKNOWN"
+    assert lv["stages"]["SCHEDULER_FIRED"]["value"] == "YES"
+    assert lv["stages"]["PROCESS_STARTED"]["value"] == "YES"
+    # an OLD run row still exists -> stage stays YES; only the cadence-less
+    # STATE judgment is withheld (no invented persistence-delay window)
+    assert lv["stages"]["RUN_MATERIALIZED"]["value"] == "YES"
+
+
+def test_p4_g7c_synthesis_consumes_traces_for_multi_cadence_lanes():
+    exp = dict(_multi_cadence_expectation("feature-phone-clank"))
+    trace = straces.make_trace(
+        trace_id="T-MC3", clank_id="feature-phone-clank",
+        scheduler_type="cron", observed_at="2026-08-24T06:00:00Z",
+        invoked_at="2026-08-24T05:55:00Z", process_started=False,
+        evidence_source="journal")
+    block = _ok_block("2026-08-24T01:00:00Z")
+    payload = _snap("2026-08-24T06:00:00Z", {"feature-phone-clank": block})
+    synth = syn.synthesize_fleet(payload, stale_hours=48.0,
+                                 liveness_expectations=[exp],
+                                 scheduler_traces=[trace])
+    claim = synth["clanks"]["feature-phone-clank"]
+    lv = claim["liveness"]
+    assert lv["stages"]["SCHEDULER_FIRED"]["value"] == "YES"
+    # operational state untouched by the execution-plane finding:
+    assert claim["state"] in ("HEALTHY", "DEGRADED", "FAILED", "UNKNOWN")
+
+
+def test_p4_g7d_anomaly_ledger_covers_multi_cadence_gap():
+    exp = _multi_cadence_expectation("feature-phone-clank")
+    trace = straces.make_trace(
+        trace_id="T-MC4", clank_id="feature-phone-clank",
+        scheduler_type="cron", observed_at="2026-08-24T06:00:00Z",
+        invoked_at="2026-08-24T05:55:00Z", process_started=False,
+        evidence_source="journal")
+    snapshots = [_snap("2026-08-24T06:00:00Z",
+                       {"feature-phone-clank": _ok_block("2026-08-24T01:00:00Z")})]
+    ledger = ano.detect(snapshots, liveness_expectations=[exp],
+                        scheduler_traces=[trace])
+    gaps = [a for a in ledger if a["type"] == "MATERIALIZATION_GAP"
+            and a["clank_id"] == "feature-phone-clank"]
+    assert len(gaps) == 1

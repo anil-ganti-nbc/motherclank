@@ -204,10 +204,13 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
                 from . import scheduler_traces as straces
                 cadence = exp.get("cadence_seconds")
                 grace = exp.get("grace_multiplier") or liveness_grace_multiplier
-                if cadence:
-                    trace = straces.latest_trace_for(
-                        scheduler_traces, cid, before=observed_at,
-                        window_seconds=float(cadence) * float(grace))
+                # window=None for multi-cadence lanes: traces still correlate
+                # (bounded only by observation time), never dropped on the
+                # floor just because no single cadence is declared.
+                window = float(cadence) * float(grace) if cadence else None
+                trace = straces.latest_trace_for(
+                    scheduler_traces, cid, before=observed_at,
+                    window_seconds=window)
             liveness_ctx[cid] = live.derive_liveness(
                 block, exp, observed_at=observed_at,
                 grace_multiplier=liveness_grace_multiplier,

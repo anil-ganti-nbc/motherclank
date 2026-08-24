@@ -179,10 +179,12 @@ def detect(snapshots: list[dict[str, Any]],
                     cadence = expectation.get("cadence_seconds")
                     grace = (expectation.get("grace_multiplier")
                              or live.DEFAULT_GRACE_MULTIPLIER)
-                    if cadence:
-                        trace = straces.latest_trace_for(
-                            scheduler_traces, cid, before=at,
-                            window_seconds=float(cadence) * float(grace))
+                    # window=None for multi-cadence lanes: positive traces
+                    # still correlate; only the cadence-bounded escalation in
+                    # derive_liveness depends on a declared window.
+                    window = float(cadence) * float(grace) if cadence else None
+                    trace = straces.latest_trace_for(
+                        scheduler_traces, cid, before=at, window_seconds=window)
                 lv = live.derive_liveness(block, expectation, observed_at=at,
                                           trace=trace)
                 if lv["liveness_state"] == "MATERIALIZATION_GAP":
