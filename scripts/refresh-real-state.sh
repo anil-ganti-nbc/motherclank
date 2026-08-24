@@ -25,10 +25,13 @@ sources = {
     # "oem_radar.db"). Both names below are copied verbatim from that
     # verification, not inferred from the resource's own naming pattern.
     "radar.db": "/var/lib/docker/volumes/oem_radar_portability_data/_data/radar.db",
-    # Free Game Tracker. Inner filename/volume NOT yet live-verified;
-    # guarded SKIP until the operator positively discovers both (never
-    # guessed from naming patterns - see INC-20260823).
-    "free_game_tracker.db": "/CHANGE/ME/confirm-inner-path/free_game_tracker.db",
+    # Free Game Tracker. Operator-confirmed 2026-08-24 against the live
+    # volume: docker-compose.yml names the volume "fgt_production_data"
+    # (mounted /app/data), NEWSROOM_DATABASE_PATH=/app/data/newsroom.db.
+    # This deploy directory is NOT a git checkout (project doesn't use
+    # GitHub yet per its own compose comment); .deployed-id is a plain
+    # identifier, not a commit SHA - do not assume git ancestry here.
+    "newsroom.db": "/var/lib/docker/volumes/fgt_production_data/_data/newsroom.db",
 }
 import os
 for name, src in sources.items():

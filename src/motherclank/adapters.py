@@ -85,7 +85,7 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
     "free-game-tracker": {
         "module": "clank_fleet.adapters.free_game_tracker",
         "class": "FreeGameTrackerAdapter",
-        "db": "free_game_tracker.db",
+        "db": "newsroom.db",  # operator-confirmed 2026-08-24; see refresh-real-state.sh
         "qc": False,
     },
 }
