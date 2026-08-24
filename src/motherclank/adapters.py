@@ -75,7 +75,7 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
     "oem-radar": {
         "module": "clank_fleet.adapters.oem_radar",
         "class": "OemRadarAdapter",
-        "db": "oem_radar.db",
+        "db": "radar.db",  # operator-confirmed 2026-08-24; see refresh-real-state.sh
         "qc": False,
     },
 }

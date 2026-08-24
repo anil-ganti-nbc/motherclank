@@ -18,9 +18,13 @@ sources = {
     # (/app/data/smartwatch-clank.sqlite3); operator: confirm the volume's
     # host-side inner path once, then this line goes live.
     "smartwatch-clank.sqlite3": "/var/lib/docker/volumes/smartwatch_clank_staging_data/_data/smartwatch-clank.sqlite3",
-    # OEM Radar staging store ("data/" WAL sqlite). Inner filename not yet
-    # operator-confirmed; line is guarded (SKIP until the path resolves).
-    "oem_radar.db": "/var/lib/docker/volumes/oem_radar_staging_data/_data/oem_radar.db",
+    # OEM Radar. Operator-confirmed 2026-08-24 against the live volume:
+    # docker-compose.yml (Tier C/portability, "NOT a production deployment")
+    # names the volume "oem_radar_portability_data" (not *_staging_data as
+    # guessed), mounted at /app/data; the inner file is "radar.db" (not
+    # "oem_radar.db"). Both names below are copied verbatim from that
+    # verification, not inferred from the resource's own naming pattern.
+    "radar.db": "/var/lib/docker/volumes/oem_radar_portability_data/_data/radar.db",
 }
 import os
 for name, src in sources.items():
