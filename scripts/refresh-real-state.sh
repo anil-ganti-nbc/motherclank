@@ -14,8 +14,16 @@ sources = {
     "smartphone_clank.db": "/opt/smartphone-clank/data/clank.db",
     "korean_tech_wire.db": "/opt/korean-tech-wire/var/korean_tech_wire.db",
     "feature_phone_clank.db": "/var/lib/docker/volumes/feature_phone_clank_staging_data/_data/feature_phone_clank.db",
+    # Smartwatch (restored volume). Inner filename per incident evidence
+    # (/app/data/smartwatch-clank.sqlite3); operator: confirm the volume's
+    # host-side inner path once, then this line goes live.
+    "smartwatch-clank.sqlite3": "/var/lib/docker/volumes/smartwatch_clank_staging_data/_data/smartwatch-clank.sqlite3",
 }
+import os
 for name, src in sources.items():
+    if not os.path.exists(src):
+        print("SKIP (source missing):", name)
+        continue
     src_con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
     dst = dest / name
     dst_con = sqlite3.connect(dst)
@@ -23,7 +31,8 @@ for name, src in sources.items():
     dst_con.close(); src_con.close()
     print("backed up:", name)
 PYBACKUP
-chmod 644 "$DEST"/*.db
+find "$DEST" -maxdepth 1 -type f -name '*.db' -exec chmod 644 {} +
+find "$DEST" -maxdepth 1 -type f -name '*.sqlite3' -exec chmod 644 {} +
 # Hand directory back to the invoking user so unprivileged WAL readers can
 # create their -shm sidecars (mode=ro on WAL requires directory write).
 if [ -n "${SUDO_USER:-}" ]; then chown -R "$SUDO_USER" "$DEST"; fi

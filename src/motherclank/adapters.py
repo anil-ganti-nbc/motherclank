@@ -57,6 +57,16 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
         "db": "feature_phone_clank.db",
         "qc": False,
     },
+    # P4-G6: onboarded via registry alone - zero Motherclank-core edits.
+    # Adapter is at schema-introspection stage (live semantic mapping
+    # BLOCKED); it reports UNKNOWN-honest blocks until the restored DB's
+    # schema is mapped by someone with read access.
+    "smartwatch-clank": {
+        "module": "clank_fleet.adapters.smartwatch_clank",
+        "class": "SmartwatchClankAdapter",
+        "db": "smartwatch-clank.sqlite3",
+        "qc": False,
+    },
 }
 
 

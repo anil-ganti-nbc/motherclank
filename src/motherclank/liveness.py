@@ -73,6 +73,10 @@ LIVENESS_STATES = (
     "UNKNOWN",
 )
 
+# Caller-level default only; the canonical rule is per-expectation
+# grace_multiplier on the registry entry. Never codified as fleet law.
+DEFAULT_GRACE_MULTIPLIER = 2.0
+
 REQUIRED_FIELDS = (
     "expectation_id",
     "clank_id",
@@ -242,9 +246,14 @@ def stage_view(block: dict[str, Any],
 
 
 def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
-                    *, observed_at: str,
-                    grace_multiplier: float = 2.0) -> dict[str, Any]:
-    """Strongest justified statement about execution for one Clank block."""
+                    *, observed_at: str, grace_multiplier: float = DEFAULT_GRACE_MULTIPLIER,
+                    trace: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Strongest justified statement about execution for one Clank block.
+
+    P-4: when a positively-invoked scheduler trace is supplied (Diagnostic-
+    Clank probe plane), SCHEDULER_FIRED becomes evidence-backed and a fired
+    trace with process_started=false proves MATERIALIZATION_GAP directly
+    (pre-exec failure) instead of relying on run-absence inference."""
     policy = (expectation or {}).get("policy")
     result: dict[str, Any] = {
         "liveness_state": "UNKNOWN",
@@ -254,7 +263,6 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
         "provenance": {"derived_by": "motherclank-liveness",
                        "observed_at": observed_at},
     }
-
     if expectation is None:
         return result
     if policy in DORMANT_POLICIES:
@@ -291,6 +299,68 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
 
     run_age = age(run_dt)
     inv_age = age(inv_dt)
+
+    # P-4: scheduler-trace evidence (Diagnostic-Clank probe plane) takes
+    # precedence over absence-of-run inference wherever it exists.
+    if trace is not None:
+        from . import scheduler_traces as straces
+        trace_inv = _parse(trace.get("invoked_at")) \
+            if trace.get("invoked_at") else None
+        trace_age = age(trace_inv)
+        if result["stages"].get("SCHEDULER_FIRED", {}).get("value") != "YES":
+            fired = straces.stage_evidence(trace)
+            for stage_name, value in fired.items():
+                result["stages"][stage_name] = {
+                    "value": value,
+                    "provenance": f"scheduler trace {trace.get('trace_id', '?')} "
+                                  f"({trace.get('evidence_source') or 'unspecified'} "
+                                  f"source)",
+                }
+        if trace_inv is not None and trace_age is not None and trace_age <= window:
+            ps = trace.get("process_started")
+            if ps is False:
+                # positive pre-exec failure: fire observed, process start
+                # positively absent. The canonical August-22 shape.
+                result["liveness_state"] = "MATERIALIZATION_GAP"
+                result["evidence"] = {
+                    "basis": "scheduler_trace",
+                    "trace_id": trace.get("trace_id"),
+                    "trace_invocation_age_seconds": trace_age,
+                    "process_started": False,
+                    "interpretation": ("scheduler fire positively observed; "
+                                       "process start positively absent; "
+                                       "pre-exec failure class; application "
+                                       "logic never executed"),
+                }
+                for stage_name, prov in (
+                        ("RUN_MATERIALIZED",
+                         "implied by trace: no process started"),
+                        ("RUN_COMPLETED",
+                         "implied by trace: no process started"),
+                        ("OUTCOME_RECORDED",
+                         "implied by trace: no process started")):
+                    result["stages"][stage_name] = {"value": "NO",
+                                                    "provenance": prov}
+                return result
+            if ps is True and (run_dt is None or trace_inv > run_dt):
+                # fire + process start observed, but no newer run row:
+                # failure between process start and persistence.
+                result["liveness_state"] = "MATERIALIZATION_GAP"
+                result["evidence"] = {
+                    "basis": "scheduler_trace",
+                    "trace_id": trace.get("trace_id"),
+                    "trace_invocation_age_seconds": trace_age,
+                    "process_started": True,
+                    "interpretation": ("process started per probe evidence but "
+                                       "no newer run materialized in the "
+                                       "application store; failed before/at "
+                                       "persistence"),
+                }
+                result["stages"]["RUN_MATERIALIZED"] = {
+                    "value": "NO",
+                    "provenance": "trace shows process start; app store has no "
+                                  "newer run row"}
+                return result
 
     if run_age is not None and run_age <= window:
         result["liveness_state"] = "CURRENT"
@@ -353,9 +423,42 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
     return result
 
 
+def placeholder_violations(record: dict[str, Any]) -> list[str]:
+    """Distinguish VERIFIED-RECORD-WITH-PLACEHOLDER from GENUINE UNKNOWN.
+
+    A registry entry that claims to represent verified live scheduler truth
+    must not carry placeholder-class values. Genuine UNKNOWN remains valid
+    when the underlying fact is genuinely unsupported - the record can say
+    so explicitly via ``verification_status: "unverified"`` (or a similar
+    non-verified marker), which suppresses these checks.
+
+    Returns a list of violations; empty means the record is either fully
+    concrete or honestly marked unverified.
+    """
+    if str(record.get("verification_status", "live_verified")).lower() in (
+            "unverified", "unknown", "placeholder"):
+        return []  # honestly marked: placeholders are permitted
+    violations: list[str] = []
+    dormant = record.get("policy") in DORMANT_POLICIES
+    if not dormant:
+        # a dormant/retired lane may genuinely have no live instance
+        for field in ("instance_id", "lane_id"):
+            if not record.get(field) or record.get(field) == "UNKNOWN":
+                violations.append(f"{field}=UNKNOWN in a verified record")
+        if not record.get("authority") or record.get("authority") == "UNKNOWN":
+            violations.append("authority=UNKNOWN in a verified record")
+    if (record.get("policy") == "PERIODIC" and not record.get("cadence_seconds")
+            and not record.get("multi_cadence")):
+        violations.append("policy=PERIODIC without cadence_seconds in a "
+                          "verified record (declare multi_cadence=true for "
+                          "genuinely per-source schedules, or mark "
+                          "verification_status=unverified)")
+    return violations
+
+
 def annotate_blocks(snapshot_payload: dict[str, Any],
                     expectations: list[dict[str, Any]],
-                    grace_multiplier: float = 2.0) -> dict[str, Any]:
+                    grace_multiplier: float = DEFAULT_GRACE_MULTIPLIER) -> dict[str, Any]:
     """Derive-time annotation of snapshot blocks with liveness context.
     Returns a copy; append-only artifacts are never modified."""
     at = snapshot_payload.get("harvested_at_utc", "")

@@ -184,7 +184,8 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
                      stale_hours: float = 24.0,
                      continuity_events: list[dict[str, Any]] | None = None,
                      liveness_expectations: list[dict[str, Any]] | None = None,
-                     liveness_grace_multiplier: float = 2.0) -> dict[str, Any]:
+                     liveness_grace_multiplier: float = 2.0,
+                     scheduler_traces: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     clanks_out = {}
     counts = {s: 0 for s in STATES}
     contexts: dict[str, dict[str, Any]] = {}
@@ -198,9 +199,19 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
         from . import liveness as live
         for cid, block in snapshot_payload.get("clanks", {}).items():
             exp = live.expectation_for(liveness_expectations, cid, observed_at)
+            trace = None
+            if scheduler_traces and exp:
+                from . import scheduler_traces as straces
+                cadence = exp.get("cadence_seconds")
+                grace = exp.get("grace_multiplier") or liveness_grace_multiplier
+                if cadence:
+                    trace = straces.latest_trace_for(
+                        scheduler_traces, cid, before=observed_at,
+                        window_seconds=float(cadence) * float(grace))
             liveness_ctx[cid] = live.derive_liveness(
                 block, exp, observed_at=observed_at,
-                grace_multiplier=liveness_grace_multiplier)
+                grace_multiplier=liveness_grace_multiplier,
+                trace=trace)
     for cid in sorted(snapshot_payload.get("clanks", {})):
         result = synthesize_clank(
             cid, snapshot_payload["clanks"][cid],

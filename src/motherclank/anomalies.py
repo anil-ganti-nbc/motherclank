@@ -71,7 +71,8 @@ def _mk(anomaly_type: str, severity: str, clank_id: str, subject: str,
 
 def detect(snapshots: list[dict[str, Any]],
            continuity_events: list[dict[str, Any]] | None = None,
-           liveness_expectations: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+           liveness_expectations: list[dict[str, Any]] | None = None,
+           scheduler_traces: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Derive the full anomaly ledger from ordered M0 snapshots.
 
     Deterministic replay: same input list => same output list. The wall clock
@@ -85,6 +86,9 @@ def detect(snapshots: list[dict[str, Any]],
     F6b: when an execution-expectations registry is supplied, expected-but-
     unmaterialized runs raise MATERIALIZATION_GAP (an execution-plane fact),
     while intentionally dormant lanes raise nothing.
+
+    P-4: scheduler-fire traces upgrade MATERIALIZATION_GAP derivation from
+    run-absence inference to positive pre-exec evidence where traces exist.
     """
     if liveness_expectations:
         from . import liveness as live  # local import: optional dependency path
@@ -169,7 +173,18 @@ def detect(snapshots: list[dict[str, Any]],
                            "stale window"))
             # --- materialization gap (F6b; pre-exec failure class) --------
             if live is not None and expectation is not None and not dormant:
-                lv = live.derive_liveness(block, expectation, observed_at=at)
+                trace = None
+                if scheduler_traces:
+                    from . import scheduler_traces as straces
+                    cadence = expectation.get("cadence_seconds")
+                    grace = (expectation.get("grace_multiplier")
+                             or live.DEFAULT_GRACE_MULTIPLIER)
+                    if cadence:
+                        trace = straces.latest_trace_for(
+                            scheduler_traces, cid, before=at,
+                            window_seconds=float(cadence) * float(grace))
+                lv = live.derive_liveness(block, expectation, observed_at=at,
+                                          trace=trace)
                 if lv["liveness_state"] == "MATERIALIZATION_GAP":
                     ev = lv.get("evidence", {})
                     upsert(_mk("MATERIALIZATION_GAP", "HIGH", cid,

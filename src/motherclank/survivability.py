@@ -131,6 +131,15 @@ def load_records(var_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
             warnings.append(f"survivability:{lineno}: invalid record skipped "
                             f"({'; '.join(errors)})")
             continue
+        # P-4 hardening: a recovery point without an artifact hash is still
+        # evidence, but it is NOT cryptographically identified. Surface the
+        # distinction at ingest; never launder it later.
+        if rec.get("record_type") == "BACKUP_CREATED" and not rec.get("hash"):
+            artifact = rec.get("artifact_id") or "unidentified artifact"
+            warnings.append(
+                "RECOVERY_POINT_WITHOUT_ARTIFACT_HASH: "
+                f"{rec.get('record_id')} ({artifact}) - backup known but not "
+                "cryptographically identified")
         records.append(rec)
     return records, warnings
 
@@ -217,6 +226,9 @@ def derive_protection(records: list[dict[str, Any]], clank_id: str,
             "expired": expired,
             "off_host_durable": offhost_durable,
             "hash": newest.get("hash"),
+            # separate claim: a hash present means the RP is cryptographically
+            # identified; its absence never downgrades the verification chain
+            "cryptographically_identified": bool(newest.get("hash")),
         },
         "rpo_estimate_seconds": rpo_seconds,
         "off_host_durable": offhost_durable,
