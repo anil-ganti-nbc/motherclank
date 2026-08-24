@@ -32,10 +32,14 @@ sources = {
     # GitHub yet per its own compose comment); .deployed-id is a plain
     # identifier, not a commit SHA - do not assume git ancestry here.
     "newsroom.db": "/var/lib/docker/volumes/fgt_production_data/_data/newsroom.db",
-    # Chinese Tech Wire staging checkout store (config default data/ctw.db).
-    # Checkout path per fleet inventory; operator: confirm once against the
-    # live checkout, then this guarded line goes live.
-    "chinese_tech_wire.db": "/home/deploy/staging/chinese-tech-wire/data/ctw.db",
+    # Chinese Tech Wire staging store. Operator-verified 2026-08-24 against
+    # the live host: docker-compose.staging.yml names the volume
+    # "ctw_staging_data" (mounted /app/data, DATABASE_URL=sqlite:////app/
+    # data/ctw.db); the checkout at /home/deploy/staging/chinese-tech-wire
+    # has NO data/ directory of its own - the guessed checkout-relative path
+    # never existed and would have silently SKIP'd forever. Real inner file
+    # is ctw.db (not chinese_tech_wire.db) inside the Docker volume.
+    "chinese_tech_wire.db": "/var/lib/docker/volumes/ctw_staging_data/_data/ctw.db",
 }
 import os
 for name, src in sources.items():
