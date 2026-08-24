@@ -42,6 +42,7 @@ STAGES = (
     "SCHEDULE_EXPECTED",
     "SCHEDULER_FIRED",
     "PROCESS_STARTED",
+    "APPLICATION_EXECUTED",
     "RUN_MATERIALIZED",
     "RUN_COMPLETED",
     "OUTCOME_RECORDED",
@@ -59,6 +60,19 @@ EXECUTION_POLICIES = (
     "UNKNOWN",
 )
 
+# P-4.1: does a successful invocation persist a participant run record?
+# ALWAYS              - every successful execution must materialize a run;
+#                       a missing record past the bound is a persistence
+#                       failure.
+# WHEN_WORK_ATTEMPTED - runs are recorded only when work was attempted; a
+#                       successful due-gated no-work invocation legitimately
+#                       writes nothing (the OEM Radar live shape).
+# OPTIONAL            - record presence carries no liveness meaning.
+# UNKNOWN             - contract undeclared; missing runs stay UNKNOWN,
+#                       never a failure inference. Default.
+MATERIALIZATION_POLICIES = ("ALWAYS", "WHEN_WORK_ATTEMPTED", "OPTIONAL",
+                            "UNKNOWN")
+
 # Policies for which absence of runs is EXPECTED behaviour, not an anomaly.
 DORMANT_POLICIES = {"MANUAL", "ON_DEMAND", "DISABLED", "RETIRED"}
 
@@ -66,7 +80,8 @@ DORMANT_POLICIES = {"MANUAL", "ON_DEMAND", "DISABLED", "RETIRED"}
 # continuity_state; never collapses into either.
 LIVENESS_STATES = (
     "CURRENT",                  # latest run evidence within expected cadence
-    "MATERIALIZATION_GAP",      # scheduler fired recently, no run since
+    "MATERIALIZATION_GAP",      # fired but expected participant record absent
+    "NO_WORK_DUE",              # positively observed successful no-work run
     "EXECUTION_STALE",          # runs older than window; cause unevidenced
     "SCHEDULER_SILENT",         # no scheduler evidence within window
     "INTENTIONALLY_DORMANT",    # policy says runs are not expected
@@ -106,6 +121,9 @@ def validate_expectation(record: dict[str, Any]) -> list[str]:
     grace = record.get("grace_multiplier")
     if grace is not None and (not isinstance(grace, (int, float)) or grace <= 0):
         errors.append("grace_multiplier must be a positive number or null")
+    mat = record.get("materialization_policy", "UNKNOWN")
+    if mat not in MATERIALIZATION_POLICIES:
+        errors.append(f"invalid materialization_policy: {mat!r}")
     expected_hash = record.get("content_hash")
     if expected_hash is not None and expected_hash != content_hash(record):
         errors.append("content_hash mismatch")
@@ -121,6 +139,9 @@ def make_expectation(**fields: Any) -> dict[str, Any]:
         "cadence_seconds": fields.pop("cadence_seconds", None),
         # per-expectation liveness grace; no universal multiplier exists
         "grace_multiplier": fields.pop("grace_multiplier", None),
+        # P-4.1: does every successful invocation persist a run record?
+        "materialization_policy": fields.pop("materialization_policy",
+                                             "UNKNOWN"),
         "active": fields.pop("active", True),
         "effective_end": fields.pop("effective_end", None),
         "notes": fields.pop("notes", ""),
@@ -286,6 +307,8 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
         window = float(cadence) * float(
             declared_grace if declared_grace is not None else grace_multiplier)
     now = _parse(observed_at)
+    mat_policy = str(expectation.get("materialization_policy")
+                     or "UNKNOWN").upper()
     run_ts, run_prov = _latest_run_ts(block)
     inv = _invocation_ts(block)
     run_dt = _parse(run_ts) if run_ts else None
@@ -322,6 +345,7 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
         trace_age = age(trace_inv)
         _apply_trace_stages(trace)
         ps = trace.get("process_started")
+        exec_result = trace.get("execution_result")
         inv_newer_than_run = (trace_inv is not None
                               and (run_dt is None or trace_inv > run_dt))
         bounded_fresh = (window is not None and trace_age is not None
@@ -346,6 +370,8 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
                                    "logic never executed"),
             }
             for stage_name, prov in (
+                    ("APPLICATION_EXECUTED",
+                     "implied by trace: no process started"),
                     ("RUN_MATERIALIZED",
                      "implied by trace: no process started"),
                     ("RUN_COMPLETED",
@@ -355,26 +381,70 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
                 result["stages"][stage_name] = {"value": "NO",
                                                 "provenance": prov}
             return result
-        if ps is True and inv_newer_than_run and bounded_fresh:
-            # fire + process start observed within the known window, but no
-            # newer run row: failure between process start and persistence.
-            result["liveness_state"] = "MATERIALIZATION_GAP"
-            result["evidence"] = {
-                "basis": "scheduler_trace",
-                "trace_id": trace.get("trace_id"),
-                "trace_invocation_age_seconds": trace_age,
-                "process_started": True,
-                "cadence_bounded": True,
-                "interpretation": ("process started per probe evidence but "
-                                   "no newer run materialized in the "
-                                   "application store; failed before/at "
-                                   "persistence"),
-            }
-            result["stages"]["RUN_MATERIALIZED"] = {
-                "value": "NO",
-                "provenance": "trace shows process start; app store has no "
-                              "newer run row"}
-            return result
+        if ps is True:
+            if exec_result in ("completed", "no_work_due", "failed"):
+                result["stages"]["APPLICATION_EXECUTED"] = {
+                    "value": "YES",
+                    "provenance": f"trace attests execution_result="
+                                  f"{exec_result}",
+                }
+            if exec_result == "no_work_due":
+                # P-4.1: positively observed successful execution with
+                # intentionally nothing to do. The absence of a participant
+                # record is EXPLAINED, never suspicious.
+                newer_run = run_dt is not None and trace_inv is not None \
+                    and run_dt >= trace_inv
+                result["liveness_state"] = "NO_WORK_DUE"
+                result["evidence"] = {
+                    "basis": "scheduler_trace",
+                    "trace_id": trace.get("trace_id"),
+                    "trace_invocation_age_seconds": trace_age,
+                    "execution_result": "no_work_due",
+                    "participant_record": ("present" if newer_run
+                                           else "none - intentional"),
+                    "interpretation": ("application executed successfully "
+                                       "and intentionally had no work due"),
+                }
+                if not newer_run:
+                    for stage_name, prov in (
+                            ("RUN_MATERIALIZED",
+                             "intentionally none: successful no-work "
+                             "execution per trace"),
+                            ("RUN_COMPLETED",
+                             "no participant record to complete"),
+                            ("OUTCOME_RECORDED",
+                             "outcome attested by probe, not participant")):
+                        result["stages"][stage_name] = {
+                            "value": "NO", "provenance": prov}
+                return result
+            if (mat_policy == "ALWAYS" and exec_result != "failed"
+                    and inv_newer_than_run and bounded_fresh):
+                # mandatory materializer: fired + started within the known
+                # bound, yet no participant record. Persistence/
+                # materialization failure class.
+                result["liveness_state"] = "MATERIALIZATION_GAP"
+                result["evidence"] = {
+                    "basis": "scheduler_trace",
+                    "trace_id": trace.get("trace_id"),
+                    "trace_invocation_age_seconds": trace_age,
+                    "process_started": True,
+                    "materialization_policy": "ALWAYS",
+                    "interpretation": ("process started but no newer run "
+                                       "materialized in the application "
+                                       "store; persistence/materialization "
+                                       "failure class"),
+                }
+                result["stages"]["RUN_MATERIALIZED"] = {
+                    "value": "NO",
+                    "provenance": "mandatory materialization policy; app "
+                                  "store has no newer run row"}
+                return result
+            # failed attested outcome / non-ALWAYS policies / unbounded
+            # timing: fall through with stage evidence retained; the cadence
+            # logic below (or UNKNOWN) owns the state. Application failure
+            # surfaces through ordinary health/run-row semantics, never as
+            # a materialization gap.
+
         # ps True without a cadence bound, or stale trace: stages updated,
         # state judgment deferred to the cadence logic below (or UNKNOWN).
 
@@ -391,7 +461,10 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
         return result
 
     # Positive scheduler evidence without a recent run => materialization gap
-    if inv_dt is not None and (run_dt is None or inv_dt > run_dt):
+    # ONLY for mandatory materializers (P-4.1): a WHEN_WORK_ATTEMPTED/OPTIONAL
+    # lane legitimately produces no run row on due-gated no-work executions.
+    if (mat_policy == "ALWAYS" and inv_dt is not None
+            and (run_dt is None or inv_dt > run_dt)):
         if inv_age is not None and inv_age <= window:
             result["liveness_state"] = "MATERIALIZATION_GAP"
             result["evidence"] = {

@@ -128,7 +128,7 @@ def test_g2_feature_phone_new_epoch_never_reads_as_organic_disappearance():
 # ---------------------------------------------------------------------------
 
 def test_g3_preexec_failure_raises_materialization_gap_not_collector_fault():
-    exp = _expectation(clank_id="oem-radar", cadence_seconds=3600)
+    exp = _expectation(clank_id="oem-radar", materialization_policy="ALWAYS")
     # scheduler fired 5 min ago; newest run is 36 hours old (incident shape)
     block = _ok_block("2026-08-20T22:00:00Z",
                       invocation="2026-08-23T21:55:00Z")

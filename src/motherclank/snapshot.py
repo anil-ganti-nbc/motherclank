@@ -63,9 +63,23 @@ def observe_clank(adapter: Any) -> dict[str, Any]:
         if not hasattr(adapter, extra):
             continue
         try:
-            block[extra] = _deep(getattr(adapter, extra)())
+            value = _deep(getattr(adapter, extra)())
         except Exception as exc:
             block[extra] = {"observation": "FAILED_ADAPTER", "error": f"{type(exc).__name__}: {exc}"}
+            continue
+        block[extra] = value
+        # P-4.1 hardening: capability statements are validated against the
+        # canonical vocabulary (clank_runtime.contracts.capabilities).
+        # Non-conforming values surface as warnings - never coerced.
+        if extra == "capability_states":
+            try:
+                from clank_runtime.contracts.capabilities import \
+                    validate_capability_states
+                violations = validate_capability_states(value)
+                if violations:
+                    block["capability_states_violations"] = violations
+            except ImportError:
+                pass  # contract module unavailable in this plane; skip check
     return block
 
 

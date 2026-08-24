@@ -53,6 +53,12 @@ EVIDENCE_SOURCES = (
     "other",
 )
 
+# P-4.1: positive application-execution outcomes the probe plane may attest
+# to. "no_work_due" means the application executed successfully and
+# intentionally had nothing to do (due-gating/min-interval) - the OEM Radar
+# live shape. Absence of this field is UNKNOWN, never assumed success.
+EXECUTION_RESULTS = ("completed", "no_work_due", "failed")
+
 REQUIRED_FIELDS = ("trace_id", "clank_id", "scheduler_type", "observed_at")
 
 
@@ -76,6 +82,10 @@ def validate_trace(record: dict[str, Any]) -> list[str]:
     ps = record.get("process_started")
     if ps is not None and not isinstance(ps, bool):
         errors.append("process_started must be boolean or null")
+    er = record.get("execution_result")
+    if er is not None and er not in EXECUTION_RESULTS:
+        errors.append(f"execution_result must be null or one of "
+                      f"{EXECUTION_RESULTS}: {er!r}")
     if _parse(record.get("observed_at")) is None:
         errors.append("observed_at is not an ISO timestamp")
     inv = record.get("invoked_at")
@@ -95,6 +105,8 @@ def make_trace(**fields: Any) -> dict[str, Any]:
         "unit_or_job": fields.pop("unit_or_job", "UNKNOWN"),
         "invoked_at": fields.pop("invoked_at", None),
         "process_started": fields.pop("process_started", None),
+        "execution_result": fields.pop("execution_result", None),
+        "execution_detail": fields.pop("execution_detail", ""),
         "exit_or_result": fields.pop("exit_or_result", None),
         "evidence_source": fields.pop("evidence_source", None),
         "origin": fields.pop("origin", "probe"),
@@ -163,10 +175,12 @@ def latest_trace_for(traces: list[dict[str, Any]], clank_id: str,
 
 def stage_evidence(trace: dict[str, Any] | None) -> dict[str, str]:
     """Map one trace onto liveness stage semantics. NO requires the trace's
-    own positive contrary evidence; nothing here invents NO."""
+    own positive contrary evidence; nothing here invents NO. A non-fire
+    observation (invoked_at null) proves nothing about firing."""
     if trace is None:
         return {"SCHEDULER_FIRED": "UNKNOWN"}
-    out = {"SCHEDULER_FIRED": "YES"}
+    fired = "YES" if trace.get("invoked_at") else "UNKNOWN"
+    out = {"SCHEDULER_FIRED": fired}
     ps = trace.get("process_started")
     if ps is True:
         out["PROCESS_STARTED"] = "YES"

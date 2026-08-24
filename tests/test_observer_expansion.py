@@ -10,6 +10,7 @@ commands in OPERATOR_HANDOFF.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -29,9 +30,17 @@ CORE_MODULES = ("snapshot", "synthesis", "anomalies", "recommendations",
                 "cli")
 
 
+def _code_only(text: str) -> str:
+    """Strip comments and docstrings so PROSE mentions of a lane name don't
+    false-trip the guard; only executable references count."""
+    text = re.sub(r'"""[\s\S]*?"""', " ", text)
+    text = re.sub(r"'''[\s\S]*?'''", " ", text)
+    return "\n".join(re.sub(r"#.*$", "", line) for line in text.splitlines())
+
+
 def _core_sources():
     base = Path(adapters_mod.__file__).parent
-    return {m: (base / f"{m}.py").read_text(encoding="utf-8")
+    return {m: _code_only((base / f"{m}.py").read_text(encoding="utf-8"))
             for m in CORE_MODULES}
 
 
@@ -83,7 +92,7 @@ def test_oem_radar_harvests_unknown_honest_without_real_state(tmp_path):
 # Fixture builder from schema evidence observed in oem_radar.py
 # ---------------------------------------------------------------------------
 
-def _oem_fixture(tmp_path: Path, *, outbox=True, change_events=True,
+def _oem_fixture(tmp_path: Path, *, notifications=True, change_events=True,
                  reviews=True) -> Path:
     db = tmp_path / "oem_radar.db"
     con = sqlite3.connect(db)
@@ -105,10 +114,12 @@ def _oem_fixture(tmp_path: Path, *, outbox=True, change_events=True,
     if reviews:
         con.execute("CREATE TABLE alert_reviews (id INTEGER PRIMARY KEY)")
         con.execute("INSERT INTO alert_reviews VALUES (1)")
-    if outbox:
-        con.execute("CREATE TABLE notification_outbox (id INTEGER PRIMARY KEY,"
+    if notifications:
+        con.execute("CREATE TABLE notifications (id INTEGER PRIMARY KEY,"
                     " status TEXT)")
-        con.execute("INSERT INTO notification_outbox VALUES (1, 'pending')")
+        con.execute("INSERT INTO notifications VALUES (1, 'sent')")
+        con.execute("INSERT INTO notifications VALUES (2, 'sent')")
+        con.execute("INSERT INTO notifications VALUES (3, 'suppressed')")
     con.commit()
     con.close()
     return db
@@ -195,14 +206,16 @@ def test_golden_d_generation_and_delivery_separate(oem_adapter):
     states = oem_adapter.capability_states()
     assert caps.supports_delivery_accounting is True
     # generation substrate exists (change_events); delivery has its own
-    # outbox state - neither implies the other
+    # notifications substrate - neither implies the other
     assert states["events"]["state"] == "active"
-    assert states["delivery"]["state"] == "supported_unconfigured"
+    assert states["delivery"]["state"] == "active"
+    delivery = oem_adapter.delivery_summary()
+    assert delivery["supported"] is True
+    assert delivery["by_status"] == {"sent": 2, "suppressed": 1}
     telemetry = oem_adapter.telemetry(limit=5)
     assert telemetry, "expected telemetry envelopes"
     ext = telemetry[0].extensions
-    assert "delivery_pending_total" in ext  # delivery tracked separately
-    assert ext["delivery_pending_total"] == 1
+    assert ext.get("delivery_status_counts") == {"sent": 2, "suppressed": 1}
 
 
 # ---------------------------------------------------------------------------
