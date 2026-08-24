@@ -246,6 +246,13 @@ def stage_view(block: dict[str, Any],
     inv = _invocation_ts(block)
     last_run = block.get("last_run") or {}
 
+    stage("APPLICATION_EXECUTED",
+          "YES" if (last_run.get("finished_at")
+                    or last_run.get("started_at")) else "UNKNOWN",
+          "run row implies execution"
+          if (last_run.get("finished_at") or last_run.get("started_at"))
+          else "no application-execution evidence visible to observer")
+
     stage("SCHEDULER_FIRED",
           "YES" if inv else "UNKNOWN",
           "scheduler_pair.last_scheduler_invocation" if inv

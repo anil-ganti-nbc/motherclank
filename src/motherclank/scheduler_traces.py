@@ -86,6 +86,12 @@ def validate_trace(record: dict[str, Any]) -> list[str]:
     if er is not None and er not in EXECUTION_RESULTS:
         errors.append(f"execution_result must be null or one of "
                       f"{EXECUTION_RESULTS}: {er!r}")
+    ext = record.get("extractor")
+    if ext is not None:
+        if not isinstance(ext, dict) or not isinstance(ext.get("id"), str) \
+                or not isinstance(ext.get("version"), (int, str)):
+            errors.append("extractor must be {id: str, version: int|str} "
+                          "or null")
     if _parse(record.get("observed_at")) is None:
         errors.append("observed_at is not an ISO timestamp")
     inv = record.get("invoked_at")
@@ -107,6 +113,7 @@ def make_trace(**fields: Any) -> dict[str, Any]:
         "process_started": fields.pop("process_started", None),
         "execution_result": fields.pop("execution_result", None),
         "execution_detail": fields.pop("execution_detail", ""),
+        "extractor": fields.pop("extractor", None),
         "exit_or_result": fields.pop("exit_or_result", None),
         "evidence_source": fields.pop("evidence_source", None),
         "origin": fields.pop("origin", "probe"),
@@ -118,6 +125,67 @@ def make_trace(**fields: Any) -> dict[str, Any]:
         raise ValueError("invalid scheduler trace: " + "; ".join(errors))
     record["content_hash"] = content_hash(record)
     return record
+
+
+def invocation_key(record: dict[str, Any]) -> str | None:
+    """Deterministic identity of ONE scheduler invocation (P-4.2 G8).
+
+    Two traces sharing an invocation key describe the same logical fire -
+    e.g., a probe rerun that enriches earlier evidence. None when the
+    record carries no invoked_at (non-fire observations have no
+    invocation identity to collide)."""
+    inv = record.get("invoked_at")
+    if not inv:
+        return None
+    raw = "|".join(str(record.get(f, "")) for f in (
+        "clank_id", "instance_id", "lane_id", "scheduler_type",
+        "unit_or_job", "invoked_at"))
+    return "sha256:" + hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _richness(record: dict[str, Any]) -> tuple:
+    """Ordering for evidence enrichment: attested outcomes beat bare
+    process facts; newer discoveries beat older ones."""
+    has_result = 1 if record.get("execution_result") else 0
+    has_ps = 1 if record.get("process_started") is not None else 0
+    return (has_result, has_ps, str(record.get("discovered_at") or ""),
+            str(record.get("observed_at") or ""))
+
+
+def dedup_by_invocation(records: list[dict[str, Any]]) -> tuple[
+        list[dict[str, Any]], list[str]]:
+    """Collapse duplicate observations of the same logical fire.
+
+    Append-only discipline: nothing on disk is rewritten. The CONSUMER view
+    keeps the richest evidence per invocation and reports every superseded
+    trace id as a warning, preserving the audit trail by reference.
+    """
+    warnings: list[str] = []
+    best: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for rec in records:
+        key = invocation_key(rec)
+        if key is None:                     # non-fire observation: keep as-is
+            out_key = f"nf:{rec.get('trace_id', len(best))}"
+            best[out_key] = rec
+            order.append(out_key)
+            continue
+        if key not in best:
+            best[key] = rec
+            order.append(key)
+            continue
+        incumbent = best[key]
+        if _richness(rec) > _richness(incumbent):
+            best[key] = rec
+            warnings.append(
+                f"superseded trace {incumbent.get('trace_id')} by "
+                f"{rec.get('trace_id')} (richer evidence, same invocation "
+                f"key)")
+        else:
+            warnings.append(
+                f"duplicate trace {rec.get('trace_id')} ignored "
+                f"(same invocation as {best[key].get('trace_id')})")
+    return [best[k] for k in order], warnings
 
 
 def load_traces(var_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
@@ -142,6 +210,8 @@ def load_traces(var_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                             f"({'; '.join(errors)})")
             continue
         records.append(rec)
+    records, dup_warnings = dedup_by_invocation(records)
+    warnings.extend(dup_warnings)
     return records, warnings
 
 
