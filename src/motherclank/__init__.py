@@ -13,4 +13,9 @@ This package must never import network, notification or DB-mutation machinery.
 __version__ = "0.1.0"
 
 SNAPSHOT_SCHEMA_VERSION = 1
-ONBOARDED = ("watch-clank", "smartphone-clank", "korean-tech-wire", "feature-phone-clank")
+# Documentation-only mirror of the effective adapter registry (see
+# adapters.BUILTIN_REGISTRY / MOTHERCLANK_ADAPTER_REGISTRY). The registry is
+# the single source of truth for membership; this tuple exists so humans
+# grepping the package find the current observer set.
+ONBOARDED = ("watch-clank", "smartphone-clank", "korean-tech-wire",
+             "feature-phone-clank", "smartwatch-clank", "oem-radar")

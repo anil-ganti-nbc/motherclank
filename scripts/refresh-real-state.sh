@@ -18,6 +18,9 @@ sources = {
     # (/app/data/smartwatch-clank.sqlite3); operator: confirm the volume's
     # host-side inner path once, then this line goes live.
     "smartwatch-clank.sqlite3": "/var/lib/docker/volumes/smartwatch_clank_staging_data/_data/smartwatch-clank.sqlite3",
+    # OEM Radar staging store ("data/" WAL sqlite). Inner filename not yet
+    # operator-confirmed; line is guarded (SKIP until the path resolves).
+    "oem_radar.db": "/var/lib/docker/volumes/oem_radar_staging_data/_data/oem_radar.db",
 }
 import os
 for name, src in sources.items():

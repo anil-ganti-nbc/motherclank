@@ -67,6 +67,17 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
         "db": "smartwatch-clank.sqlite3",
         "qc": False,
     },
+    # Hot-swap specimen lane (observer expansion phase): onboarded via this
+    # data row alone. No Motherclank core module references OEM Radar.
+    # db filename pending operator confirmation of the staging store's
+    # inner path ("data/" WAL store); harvest yields UNKNOWN-honest blocks
+    # until the real-state copy exists.
+    "oem-radar": {
+        "module": "clank_fleet.adapters.oem_radar",
+        "class": "OemRadarAdapter",
+        "db": "oem_radar.db",
+        "qc": False,
+    },
 }
 
 
