@@ -91,7 +91,7 @@ def main() -> int:
         "bundle_verified": verify.returncode == 0,
         "requires_base_on_remote": f"origin/{args.base_origin} must contain {base}",
     }
-    manifest_path = args.out / f"manifest-{safe_branch}.json"
+    manifest_path = args.out / f"manifest-{repo.name}-{safe_branch}.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(json.dumps(manifest, indent=2))
     return 0 if verify.returncode == 0 else 1

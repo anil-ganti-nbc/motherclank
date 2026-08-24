@@ -62,7 +62,7 @@ def test_manifest_matches_real_commit_graph(tmp_path):
     assert rc == 0
 
     manifest = json.loads(
-        (out / f"manifest-{branch}.json").read_text("utf-8"))
+        (out / f"manifest-{repo.name}-{branch}.json").read_text("utf-8"))
     # every metadata value comes from git, and matches it exactly:
     assert manifest["base_sha"] == base
     assert manifest["head_sha"] == head
