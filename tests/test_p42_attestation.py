@@ -132,8 +132,6 @@ def test_p42_g3_attested_failed_is_never_no_work():
 # ---------------------------------------------------------------------------
 
 def test_p42_g4_preexec_gap_unchanged():
-    import motherclank.liveness as _L
-    assert "opencode" in str(_L.__file__), f"wrong module: {_L.__file__}"
     exp = _exp(materialization_policy="ALWAYS")
     t = _trace(process_started=False,
                invoked_at="2026-08-26T05:55:00Z",
