@@ -143,6 +143,7 @@ def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str
     extend = bool(doc.pop("extend_builtin", True))
     if not extend:
         registry.clear()
+    seen_stores: dict[str, str] = {}
     for cid, entry in doc.items():
         if not isinstance(cid, str) or not isinstance(entry, dict):
             raise AdapterPlaneUnavailable(f"invalid registry row: {cid!r}")
@@ -156,6 +157,16 @@ def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str
             "db": entry["db"],
             "qc": bool(entry.get("qc", False)),
         }
+    # Duplicate store identity (final sweep, builtin included): two lanes
+    # pointing at one DB file would silently cross-contaminate evidence.
+    seen_stores: dict[str, str] = {}
+    for cid, entry in registry.items():
+        db_key = str(entry["db"])
+        if db_key in seen_stores:
+            raise AdapterPlaneUnavailable(
+                f"duplicate store identity: {db_key} claimed by both "
+                f"{seen_stores[db_key]!r} and {cid!r}")
+        seen_stores[db_key] = cid
     return registry
 
 

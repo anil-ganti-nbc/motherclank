@@ -36,8 +36,32 @@ def _deep(value: Any) -> Any:
 
 
 def observe_clank(adapter: Any) -> dict[str, Any]:
-    """Run the read-only adapter surface for one Clank. Never raises."""
+    """Run the read-only adapter surface for one Clank. Never raises.
+
+    Contract v0.2: the observer surface is validated FIRST. A non-
+    conforming adapter yields an isolated UNKNOWN block carrying its
+    contract_violations - sibling lanes are never touched."""
     block: dict[str, Any] = {}
+    from . import contract as obs_contract
+
+    violations: list[str] = []
+    if callable(getattr(adapter, "identity", None)):
+        try:
+            desc = adapter.identity()
+            rtv = str(getattr(desc, "contract_version", "") or "") or None
+            violations.extend(
+                obs_contract.validate_surface(
+                    adapter, runtime_contract_version=rtv))
+        except Exception as exc:  # noqa: BLE001 - identity failure is itself
+            # an isolation case; surface validation still runs without it.
+            violations.extend(obs_contract.validate_surface(adapter))
+            violations.append(f"identity() raised: {type(exc).__name__}: {exc}")
+    else:
+        violations.extend(obs_contract.validate_surface(adapter))
+    if violations:
+        return {"observation": "FAILED_ADAPTER",
+                "error": "observer surface contract violation",
+                "contract_violations": sorted(violations)}
     try:
         desc = adapter.identity()
         block["clank_version"] = getattr(desc, "clank_version", _UNKNOWN)

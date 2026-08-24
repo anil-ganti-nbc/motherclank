@@ -236,6 +236,14 @@ def test_capability_states_canonical_vocabulary_enforced(tmp_path):
         def capabilities(self):
             class C: supports_delivery_accounting = False
             return C()
+        def status(self):
+            class S: operational_state = None
+            return S()
+        def health(self):
+            class H: sources = []
+            return H()
+        def last_run(self):
+            return {"supported": False}
         def capability_states(self):
             return {"collection": {"state": "kinda_ok", "evidence": "trust"}}
     built = {"adapters": {"rogue": Rogue(db)}, "versions": {},
