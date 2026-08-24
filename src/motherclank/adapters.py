@@ -85,7 +85,17 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
     "free-game-tracker": {
         "module": "clank_fleet.adapters.free_game_tracker",
         "class": "FreeGameTrackerAdapter",
-        "db": "newsroom.db",  # operator-confirmed 2026-08-24; see refresh-real-state.sh
+        # operator-verified live inner name (volume fgt_production_data,
+        # mounted /app/data): newsroom.db - NOT free_game_tracker.db
+        "db": "newsroom.db",
+        "qc": False,
+    },
+    # v0.3 dogfood lane: onboarded via this data row alone. Native
+    # source_runs substrate; layer-tagged health entries stay distinct.
+    "chinese-tech-wire": {
+        "module": "clank_fleet.adapters.chinese_tech_wire",
+        "class": "ChineseTechWireAdapter",
+        "db": "chinese_tech_wire.db",
         "qc": False,
     },
 }

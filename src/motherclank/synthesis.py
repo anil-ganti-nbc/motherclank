@@ -177,6 +177,18 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
             "evidence": liveness.get("evidence", {}),
             "orthogonal_to_operational_health": True,
         }
+    if liveness is not None:
+        claim_obj["liveness"] = {
+            "liveness_state": liveness.get("liveness_state", "UNKNOWN"),
+            "policy": liveness.get("policy", "UNKNOWN"),
+            "stages": liveness.get("stages", {}),
+            "evidence": liveness.get("evidence", {}),
+            "orthogonal_to_operational_health": True,
+        }
+    # Adapter-declared capability statements ride along verbatim: they are
+    # evidence about the lane, not derived claims, so no interpretation here.
+    if isinstance(block.get("capability_states"), dict):
+        claim_obj["capability_states"] = block["capability_states"]
     return claim_obj
 
 

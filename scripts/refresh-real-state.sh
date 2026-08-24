@@ -32,6 +32,10 @@ sources = {
     # GitHub yet per its own compose comment); .deployed-id is a plain
     # identifier, not a commit SHA - do not assume git ancestry here.
     "newsroom.db": "/var/lib/docker/volumes/fgt_production_data/_data/newsroom.db",
+    # Chinese Tech Wire staging checkout store (config default data/ctw.db).
+    # Checkout path per fleet inventory; operator: confirm once against the
+    # live checkout, then this guarded line goes live.
+    "chinese_tech_wire.db": "/home/deploy/staging/chinese-tech-wire/data/ctw.db",
 }
 import os
 for name, src in sources.items():
