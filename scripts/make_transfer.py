@@ -22,6 +22,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def safe_branch_name(branch: str) -> str:
+    return branch.replace("/", "-")
+
+
 def git(repo: Path, *args: str) -> str:
     out = _run(["git", "-C", str(repo), *args])
     if out.returncode != 0:
@@ -50,7 +54,17 @@ def main() -> int:
     ap.add_argument("--base", default=None,
                     help="explicit base SHA; overrides --base-origin lookup")
     ap.add_argument("--out", required=True, type=Path)
+    # Transfer-chain hardening: sequenced names prevent a later phase from
+    # silently overwriting a prerequisite phase's bundle (the exact failure
+    # that made P-4.1 unreachable). Both --seq and --label are REQUIRED
+    # together and become part of the artifact name.
+    ap.add_argument("--seq", default=None,
+                    help="chain step number, e.g. 01; enables sequenced naming")
+    ap.add_argument("--label", default=None,
+                    help="increment label, e.g. p41 or fgt-capability")
     args = ap.parse_args()
+    if bool(args.seq) != bool(args.label):
+        raise SystemExit("--seq and --label must be used together")
 
     repo = args.repo.resolve()
     branch = args.branch
@@ -61,10 +75,18 @@ def main() -> int:
         base = git(repo, "merge-base", f"origin/{args.base_origin}", branch)
     subjects = git(repo, "log", "--format=%h %s", f"{base}..{branch}").splitlines()
 
-    safe_branch = branch.replace("/", "-")
-    bundle = args.out / f"{repo.name}-{safe_branch}.bundle"
-    patch_dir = args.out / f"patches-{safe_branch}"
+    if args.seq:
+        bundle = args.out / f"{args.seq}-{repo.name}-{args.label}.bundle"
+        patch_dir = args.out / f"patches-{args.seq}-{args.label}"
+    else:
+        bundle = args.out / f"{repo.name}-{safe_branch_name(branch)}.bundle"
+        patch_dir = args.out / f"patches-{repo.name}-{safe_branch_name(branch)}"
     args.out.mkdir(parents=True, exist_ok=True)
+
+    if bundle.exists():
+        raise SystemExit(
+            f"refusing to overwrite existing bundle: {bundle}. "
+            "Bundles are immutable evidence; use a new seq/label.")
 
     git(repo, "bundle", "create", str(bundle), f"{base}..{branch}")
     if patch_dir.exists():
@@ -82,6 +104,8 @@ def main() -> int:
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "repo": repo.name,
         "branch": branch,
+        "seq": args.seq,
+        "label": args.label,
         "base_sha": base,
         "head_sha": head,
         "commit_count": len(subjects),
@@ -91,7 +115,9 @@ def main() -> int:
         "bundle_verified": verify.returncode == 0,
         "requires_base_on_remote": f"origin/{args.base_origin} must contain {base}",
     }
-    manifest_path = args.out / f"manifest-{repo.name}-{safe_branch}.json"
+    manifest_path = args.out / (
+        f"manifest-{args.seq}-{repo.name}.json" if args.seq
+        else f"manifest-{repo.name}-{safe_branch_name(branch)}.json")
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(json.dumps(manifest, indent=2))
     return 0 if verify.returncode == 0 else 1
