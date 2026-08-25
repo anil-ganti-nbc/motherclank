@@ -40,6 +40,13 @@ sources = {
     # never existed and would have silently SKIP'd forever. Real inner file
     # is ctw.db (not chinese_tech_wire.db) inside the Docker volume.
     "chinese_tech_wire.db": "/var/lib/docker/volumes/ctw_staging_data/_data/ctw.db",
+    # Semiconductor Intelligence staging store. Operator-verified 2026-08-25
+    # against the live host: docker-compose.staging.yml names the volume
+    # "semintel_staging_data" (mounted /app/data, SEMI_INTEL_DB_URL=sqlite:
+    # ////app/data/semi_intel.db). Cross-checked per ONBOARDING.md step 8:
+    # registry key "semiconductor_intelligence.db" is a real-state copy
+    # name only, distinct from the source's own inner filename.
+    "semiconductor_intelligence.db": "/var/lib/docker/volumes/semintel_staging_data/_data/semi_intel.db",
 }
 import os
 for name, src in sources.items():
