@@ -465,4 +465,14 @@ ENTRIES += (
                     "test_gic38_event_time_newer_than_ingestion_flagged_"
                     "verbatim"],
      "origin": "distributed-host reality"},
+    {"id": "GIC-39", "title": "participant-native confidence mistaken "
+              "for observer truth", "plane": "provenance/epistemology",
+     "evidence_shape": "participant 0..1 confidence float on domain objects",
+     "expected": ["value preserved verbatim as participant-native"],
+     "forbidden": ["normalizing into observer truth judgments"],
+     "provenance": "payload.native_confidence with explicit disclaimer",
+     "status": "executable",
+     "covered_by": ["tests/test_si_onboarding.py::"
+                    "test_gic39_participant_confidence_is_not_observer_truth"],
+     "origin": "semiconductor-intelligence claims.confidence"},
 )

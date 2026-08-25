@@ -98,6 +98,16 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
         "db": "chinese_tech_wire.db",
         "qc": False,
     },
+    # First hard v0.3 extension lane: claims-and-evidence subject model.
+    # Emits intelligence_assertion@1 typed envelopes (generic fleet-wide
+    # type); ACT-003 scheduler-path residual carried honestly as
+    # unverified, never HEALTHY.
+    "semiconductor-intelligence": {
+        "module": "clank_fleet.adapters.semiconductor_intelligence",
+        "class": "SemiconductorIntelligenceAdapter",
+        "db": "semiconductor_intelligence.db",
+        "qc": False,
+    },
 }
 
 

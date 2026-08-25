@@ -157,6 +157,41 @@ def _seed_canonical_types() -> None:
     register_type("survivability_event", majors={1},
                   validate_payload=surv.validate_record)
 
+    # P-4.3/v0.3 extension: generic falsifiable-assertion evidence.
+    # Fleet-wide concept (any claims/evidence-style participant may emit it);
+    # NOT named after any single participant. Native confidence values are
+    # preserved verbatim as PARTICIPANT-NATIVE scores and are never
+    # interpreted as observer truth judgments.
+    def _validate_assertion(payload: dict) -> list[str]:
+        errors: list[str] = []
+        if not isinstance(payload, dict):
+            return ["payload must be a mapping"]
+        if not payload.get("assertion_ref"):
+            errors.append("assertion_ref required")
+        if not payload.get("status"):
+            errors.append("status required (participant-native lifecycle)")
+        if _parse(payload.get("occurred_at")) is None:
+            errors.append("payload.occurred_at missing/invalid")
+        return errors
+
+    def _consume_assertion(env: dict) -> Any:
+        payload = env.get("payload") or {}
+        by_status: dict[str, int] = {}
+        status = str(payload.get("status", "")).lower()
+        by_status[status] = by_status.get(status, 0) + 1
+        return {
+            "assertion_summary": {
+                "by_status": by_status,
+                "native_confidence": payload.get("native_confidence"),
+                "note": ("participant-native confidence preserved verbatim; "
+                         "NOT an observer truth judgment"),
+            },
+        }
+
+    register_type("intelligence_assertion", majors={1},
+                  validate_payload=_validate_assertion)
+    _CONSUMERS["intelligence_assertion"] = _consume_assertion
+
 
 _seed_canonical_types()
 
