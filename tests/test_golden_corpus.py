@@ -10,7 +10,7 @@ from motherclank.golden_corpus import CORPUS_SPEC_VERSION, ENTRIES, get, ids
 
 EXPECTED_IDS = ({f"GIC-{i:02d}" for i in range(1, 21)}
                 | {"GIC-21", "GIC-22", "GIC-23", "GIC-24", "GIC-25"}
-                | {f"GIC-{i}" for i in range(26, 40)})
+                | {f"GIC-{i}" for i in range(26, 42)})
 
 
 def test_corpus_is_complete_and_wellformed():

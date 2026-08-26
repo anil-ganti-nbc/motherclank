@@ -475,4 +475,54 @@ ENTRIES += (
      "covered_by": ["tests/test_si_onboarding.py::"
                     "test_gic39_participant_confidence_is_not_observer_truth"],
      "origin": "semiconductor-intelligence claims.confidence"},
+    {"id": "GIC-40", "title": "application execution present with empty "
+              "provider-attempt substrate",
+     "plane": "execution liveness / dual execution planes",
+     "evidence_shape": "operational_job_runs rows exist; provider_runs "
+                       "table absent or zero rows; sources configured as "
+                       "manual-only (polling_enabled=0)",
+     "expected": ["application liveness known/current from job plane",
+                  "provider plane independently empty/unknown",
+                  "no MATERIALIZATION_GAP from provider_runs=0 alone"],
+     "forbidden": ["provider_runs=0 implying application failure",
+                   "collapsing job and provider planes into one substrate",
+                   "fabricating provider attempts from job evidence"],
+     "provenance": "last_run.clock=native_operational_job_run + "
+                   "substrate=operational_job_runs; "
+                   "sources.polling_enabled evidence",
+     "status": "executable",
+     "covered_by": ["tests/test_p44_execution_planes.py::"
+                    "test_gic40_app_execution_present_provider_empty_is_"
+                    "honest",
+                    "tests/test_p44_execution_planes.py::"
+                    "test_gic40b_with_provider_runs_both_planes_present"],
+     "origin": "SI live convergence: OperationalScheduler active but sole "
+               "source is manual (polling_enabled=0); provider_runs=0 is "
+               "legitimate"},
+    {"id": "GIC-41", "title": "declared optional evidence extension "
+              "unreachable from observer dispatch",
+     "plane": "observer contract / hot-swap boundary",
+     "evidence_shape": "adapter implements a valid typed-evidence producer "
+                       "(e.g., evidence_envelopes) but observer dispatch "
+                       "uses a hardcoded method list that omits it",
+     "expected": ["generic registry-driven extension dispatch invokes all "
+                  "declared extensions without snapshot.py edits per new "
+                  "extension",
+                  "conformance test catches unreachable declared extensions"],
+     "forbidden": ["hardcoded extension invocation lists in core dispatch",
+                   "adapters passing tests while their production evidence "
+                   "producer is unreachable"],
+     "provenance": "contract.register_optional_extension + "
+                   "optional_extension_names()",
+     "status": "executable",
+     "covered_by": ["tests/test_p44_execution_planes.py::"
+                    "test_generic_dispatch_invokes_newly_registered_extension",
+                    "tests/test_p44_execution_planes.py::"
+                    "test_gic41_evidence_envelopes_flow_through_full_harvest",
+                    "tests/test_p44_execution_planes.py::"
+                    "test_core_has_no_hardcoded_extension_list"],
+     "origin": "P-4.4 live convergence: intelligence_assertion@1 existed "
+               "at unit level but SI adapter never emitted envelopes "
+               "through live harvest because snapshot.py's hardcoded "
+               "list didn't include evidence_envelopes"},
 )
