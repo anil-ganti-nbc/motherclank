@@ -56,6 +56,60 @@ REQUIRED_METHODS = (
     "capability_states",
 )
 
+# ---------------------------------------------------------------------------
+# Optional extension registry (v0.3.1): replaces the hardcoded invocation
+# list in snapshot.py. Adapters expose these methods; the observer discovers
+# and invokes them generically. Adding a new extension = calling
+# ``register_optional_extension`` — never editing snapshot dispatch code.
+# ---------------------------------------------------------------------------
+
+_OPTIONAL_EXTENSIONS: dict[str, dict[str, str]] = {}
+
+
+def register_optional_extension(name: str, *, since: str,
+                                description: str) -> None:
+    _OPTIONAL_EXTENSIONS[name] = {"since": since, "description": description}
+
+
+def optional_extension_names() -> tuple[str, ...]:
+    return tuple(sorted(_OPTIONAL_EXTENSIONS))
+
+
+def is_declared_extension(name: str) -> bool:
+    return name in _OPTIONAL_EXTENSIONS
+
+
+def _seed_extensions() -> None:
+    seed = [
+        ("event_summary", "0.1", "event counts / taxonomy summary"),
+        ("delivery_summary", "0.1", "delivery accounting substrate"),
+        ("qc_summary", "0.1", "QC/review disposition summary"),
+        ("qc_records", "0.2", "verbatim QC records"),
+        ("source_lifecycle", "0.1", "per-source lifecycle declarations"),
+        ("timeline_taxonomy", "0.2", "timeline event taxonomy"),
+        ("schema_revision", "0.1", "schema version evidence"),
+        ("current_epoch", "0.2", "participant epoch/continuity marker"),
+        ("capability_states", "0.2", "canonical CapabilityState statements"),
+        ("evidence_envelopes", "0.3.1",
+         "typed EvidenceEnvelope producer (P-4.2/P-4.3 architecture "
+         "substrate; formally declared, not a convenience string)"),
+        ("telemetry", "0.1", "recent execution telemetry envelopes"),
+        ("eligible_count", "0.2", "review-eligible item counts"),
+        ("generation_summary", "0.3", "discovery/generation substrates"),
+        ("execution_evidence", "0.3", "dual-plane execution evidence"),
+        ("recent_runs", "0.3", "ordered recent native runs"),
+        ("store_inventory", "0.3", "sqlite table inventory"),
+        ("provider_collection_summary", "0.3.1",
+         "provider-collection plane status"),
+        ("job_runs_recent", "0.3.1",
+         "application-level scheduled job runs"),
+    ]
+    for name, since, desc in seed:
+        register_optional_extension(name, since=since, description=desc)
+
+
+_seed_extensions()
+
 
 def _runtime_major(version: Any) -> str | None:
     if not isinstance(version, str) or not version.strip():

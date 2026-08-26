@@ -81,9 +81,13 @@ def observe_clank(adapter: Any) -> dict[str, Any]:
         except Exception as exc:
             block[name] = {"observation": "FAILED_ADAPTER", "error": f"{type(exc).__name__}: {exc}"}
 
-    for extra in ("event_summary", "delivery_summary", "qc_summary",
-                  "source_lifecycle", "timeline_taxonomy", "schema_revision",
-                  "current_epoch", "capability_states", "evidence_envelopes"):
+    # Contract v0.3.1: optional extension dispatch is REGISTRY-DRIVEN.
+    # Extensions are declared via ``contract.register_optional_extension``
+    # and invoked in sorted order for deterministic output. Undeclared
+    # adapter methods are NEVER invoked; a raising or malformed extension
+    # is isolated to its own key without poisoning sibling extensions.
+    from .contract import optional_extension_names
+    for extra in sorted(optional_extension_names()):
         if not hasattr(adapter, extra):
             continue
         try:

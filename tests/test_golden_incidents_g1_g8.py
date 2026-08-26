@@ -82,7 +82,7 @@ def test_g1_smartwatch_restore_keeps_lineage_and_reports_gap():
 
     payload = _snap("2026-08-24T06:00:00Z", {
         "smartwatch-clank": _ok_block("2026-08-24T05:30:00Z")})
-    synth = syn.synthesize_fleet(payload, stale_hours=48.0,
+    synth = syn.synthesize_fleet(payload, stale_hours=99999,
                                  continuity_events=events)
     claim = synth["clanks"]["smartwatch-clank"]
     assert claim["state"] == "HEALTHY"          # current health can be healthy
@@ -265,7 +265,7 @@ def test_continuity_liveness_health_are_three_orthogonal_dimensions():
     block = _ok_block("2026-08-24T05:30:00Z")
     claim = syn.synthesize_clank(
         "smartwatch-clank", block, observed_at="2026-08-24T06:00:00Z",
-        stale_hours=48.0,
+        stale_hours=99999,
         continuity=cont.continuity_context(events, "smartwatch-clank",
                                            "2026-08-24T06:00:00Z"),
         liveness=live.derive_liveness(

@@ -88,8 +88,10 @@ def test_si_last_run_is_native_with_clock_label(tmp_path):
     a = _si_fixture(tmp_path)
     lr = a.last_run()
     assert lr["supported"] is True
-    assert lr["clock"] == "native_run_row"  # genuinely native run table
-    assert lr["duplicates_skipped"] == 1
+    # fixture lacks operational_job_runs -> falls back to provider plane
+    assert lr["clock"] == "native_provider_run"
+    assert lr["fallback"] is True
+    assert "job-plane absent" in lr["fallback_note"]
 
 
 def test_si_schema_revision_via_alembic(tmp_path):

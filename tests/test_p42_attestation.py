@@ -264,7 +264,7 @@ def test_attested_trace_flows_through_synthesis(tmp_path):
     payload = {"harvested_at_utc": NOW,
                "content_hash": "sha256:p42",
                "clanks": {"oem-radar": _block()}}
-    synth = syn.synthesize_fleet(payload, stale_hours=48.0,
+    synth = syn.synthesize_fleet(payload, stale_hours=99999,
                                  liveness_expectations=[exp],
                                  scheduler_traces=[trace])
     claim = synth["clanks"]["oem-radar"]

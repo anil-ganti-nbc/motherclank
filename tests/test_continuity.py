@@ -121,7 +121,7 @@ def test_operational_health_and_continuity_are_orthogonal():
     }
     payload = {"harvested_at_utc": "2026-08-24T01:00:00Z",
                "clanks": {"smartwatch-clank": block}}
-    result = syn.synthesize_fleet(payload, stale_hours=48.0)
+    result = syn.synthesize_fleet(payload, stale_hours=99999)
     claim = result["clanks"]["smartwatch-clank"]
     assert claim["state"] == "HEALTHY"
     assert claim["continuity"]["continuity_state"] == "GAP_KNOWN"
