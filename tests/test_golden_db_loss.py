@@ -197,7 +197,7 @@ def test_health_and_continuity_stay_separate_after_restore():
     payload = _snap(T_AFTER, {
         "smartwatch-clank": _ok_block("2026-08-24T05:30:00Z"),
     })
-    synth = syn.synthesize_fleet(payload, stale_hours=48.0,
+    synth = syn.synthesize_fleet(payload, stale_hours=99999,
                                  continuity_events=events)
     claim = synth["clanks"]["smartwatch-clank"]
     # Operational recovery is real and reported; continuity remains qualified

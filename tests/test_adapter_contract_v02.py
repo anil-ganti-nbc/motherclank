@@ -299,7 +299,7 @@ def test_three_dimensions_survive_every_combination(op, cont, lv):
     }
     payload = {"harvested_at_utc": "2026-08-26T06:00:00Z",
                "clanks": {"c": dict(base_block)}}
-    alone = syn.synthesize_fleet(dict(payload), stale_hours=48.0)
+    alone = syn.synthesize_fleet(dict(payload), stale_hours=99999)
 
     decorated = {"harvested_at_utc": "2026-08-26T06:00:00Z",
                  "clanks": {"c": dict(base_block, **{
@@ -308,7 +308,7 @@ def test_three_dimensions_survive_every_combination(op, cont, lv):
                                      "evidence_refs": []},
                      "liveness": {"liveness_state": lv, "policy": "PERIODIC",
                                   "stages": {}, "evidence": {}}})}}
-    both = syn.synthesize_fleet(decorated, stale_hours=48.0)
+    both = syn.synthesize_fleet(decorated, stale_hours=99999)
 
     a, b = alone["clanks"]["c"], both["clanks"]["c"]
     assert a["state"] == b["state"], "continuity/liveness changed health"

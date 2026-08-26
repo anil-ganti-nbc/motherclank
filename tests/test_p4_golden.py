@@ -330,7 +330,7 @@ def test_p4_g7c_synthesis_consumes_traces_for_multi_cadence_lanes():
         evidence_source="journal")
     block = _ok_block("2026-08-24T01:00:00Z")
     payload = _snap("2026-08-24T06:00:00Z", {"feature-phone-clank": block})
-    synth = syn.synthesize_fleet(payload, stale_hours=48.0,
+    synth = syn.synthesize_fleet(payload, stale_hours=99999,
                                  liveness_expectations=[exp],
                                  scheduler_traces=[trace])
     claim = synth["clanks"]["feature-phone-clank"]

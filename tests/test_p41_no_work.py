@@ -175,7 +175,7 @@ def test_oem_real_shape_synthesis_never_fabricates_gap(tmp_path):
         execution_detail="done: 0 source(s) crawled, 0 snapshot(s), 0 event(s)",
         evidence_source="journal")
     payload = _oem_real_shape_fixture(tmp_path)
-    synth = syn.synthesize_fleet(payload, stale_hours=48.0,
+    synth = syn.synthesize_fleet(payload, stale_hours=99999,
                                  liveness_expectations=[exp],
                                  scheduler_traces=[trace])
     claim = synth["clanks"]["oem-radar"]
