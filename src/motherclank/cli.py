@@ -88,6 +88,17 @@ def main(argv: list[str] | None = None) -> int:
     cv = sub.add_parser("validate-continuity",
                         help="read-only validation of the append-only continuity registry")
     cv.add_argument("--var-dir", required=True, type=Path)
+    co = sub.add_parser("closeout",
+                        help="assemble the canonical machine-readable fleet closeout record")
+    co.add_argument("--live-evidence", required=True, type=Path,
+                    help="operator-verified JSONL evidence entries (structural, hashed)")
+    co.add_argument("--lane-configs", type=Path)
+    co.add_argument("--continuity-events", type=Path,
+                    help="JSONL continuity events (validated; invalid lines skipped with warning)")
+    co.add_argument("--scheduler-traces", type=Path,
+                    help="P-4 traces.jsonl (attestation stays UNKNOWN without them)")
+    co.add_argument("--out", type=Path,
+                    help="write the closeout payload here (stdout always)")
     args = parser.parse_args(argv)
 
     if args.command == "harvest":
@@ -108,6 +119,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"warning: {w}", file=sys.stderr)
         print(f"continuity registry: {len(events)} valid event(s), "
               f"registry_hash={cont.registry_hash(events) if events else 'empty'}")
+        return 1 if warnings else 0
+    if args.command == "closeout":
+        from .closeout import build_closeout_from_files
+
+        try:
+            payload, warnings = build_closeout_from_files(
+                generated_at_utc=datetime.now(UTC).isoformat(
+                    timespec="seconds").replace("+00:00", "Z"),
+                live_evidence_path=args.live_evidence,
+                lane_configs_path=args.lane_configs,
+                continuity_events_path=args.continuity_events,
+                scheduler_traces_path=args.scheduler_traces,
+            )
+        except ValueError as exc:
+            print(f"closeout refused: {exc}", file=sys.stderr)
+            return 2
+        for w in warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        if args.out is not None:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(rendered, encoding="utf-8")
+        sys.stdout.write(rendered)
         return 1 if warnings else 0
     return 2
 

@@ -124,10 +124,17 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
         elif bad:
             src_state = "DEGRADED"
 
-    # R3 recency downgrade (only ever downgrades)
+    # R3 recency downgrade (only ever downgrades).
+    # Reference time is the SNAPSHOT's own harvest instant, never wall
+    # clock: derived claims must be a deterministic function of the
+    # snapshot they claim about, and replays of historical snapshots must
+    # not silently become stale.
+    ref_dt = _parse(observed_at) if observed_at else None
+    if ref_dt is None:
+        ref_dt = datetime.now(timezone.utc)
     recency_state = None
     if last_dt is not None:
-        age_h = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0
+        age_h = (ref_dt - last_dt).total_seconds() / 3600.0
         if age_h > stale_hours:
             recency_state = "UNKNOWN"
             note(f"recency.age_hours>{stale_hours} ({age_h:.1f}h)")

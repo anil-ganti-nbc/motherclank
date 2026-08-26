@@ -1,0 +1,666 @@
+{
+  "classification_vocabulary": [
+    "COMPLETE",
+    "CODE_COMPLETE_LIVE_UNPROVEN",
+    "LIVE_COMPLETE_BOUNDED_DEBT",
+    "BLOCKING_GAP",
+    "DEFERRED_NONBLOCKING",
+    "UNSUPPORTED_BY_PARTICIPANT",
+    "UNKNOWN"
+  ],
+  "counts": {
+    "by_completion_classification": {
+      "LIVE_COMPLETE_BOUNDED_DEBT": 8,
+      "UNKNOWN": 4
+    },
+    "lanes": 12,
+    "unknown_declaration_fields": 6
+  },
+  "derived_label": "DERIVED fleet closeout \u2014 Motherclank P-FINAL; operator-evidence carried verbatim, UNKNOWN preserved",
+  "generated_at_utc": "2026-08-26T19:43:01Z",
+  "inputs": {
+    "continuity_event_count": 0,
+    "live_evidence_records": 12,
+    "live_evidence_sha256": "sha256:1e999a8cefb024aee32c523211cac99d5d6a7a75d1ef0b99d4768e35acf82f6b",
+    "scheduler_trace_count": 10,
+    "scheduler_traces_sha256": "sha256:be09dfe603fd3d79512a5a123ff618aa2017a12fbffb647aa31f0ba67f505f4b",
+    "unmatched_lane_configs": []
+  },
+  "lanes": [
+    {
+      "backup_recovery_evidence": [
+        "scripts/backup present; durability class bounded per CTW debt register"
+      ],
+      "blocking_debt": [
+        "probe-plane trace publication previously REQUIRED - now partially closed by P-4 trace records (scheduler-fire YES via journal + wrapper-marker outcome); durable off-host redundancy still open"
+      ],
+      "bounded_debt": [
+        "SourceHealthEntry lacks first-class layer dimension",
+        "report.py clock display",
+        "continuity remains unknown_or_unverified"
+      ],
+      "clank_id": "chinese-tech-wire",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "CONTINUOUS",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": []
+      },
+      "datastore": {
+        "identity": "data/ctw.db under checkout (/home/deploy/staging/chinese-tech-wire)",
+        "path_or_volume": "/home/deploy/staging/chinese-tech-wire/data/ctw.db",
+        "schema_revision": "UNKNOWN"
+      },
+      "deployment": {
+        "deployed_commit_sha": "c1b3a415a07bc5b58f4237268aff03ee2fb82ff1",
+        "environment": "staging",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T19:06:30Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "ctw-hetzner-hourly-cron-01",
+      "lane_id": "staging",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T19:06:30Z",
+        "evidence_ref": "CTW_LIVE_VALIDATION_COMPLETE_WITH_BOUNDED_DEBT; wrapper log finish id=413 status=SUCCESS duration=86.7s @19:06:30Z"
+      },
+      "notification_capability": "unsupported_by_configuration_on_host (alerts evaluated=100 eligible=0 attempted=0 sent=0 in participant log)",
+      "rollback_surface": "prior image chinese-tech-wire:552ffff retained; archived .deployed-id",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": "completed",
+          "invoked_at": "2026-08-26T19:05:01Z",
+          "trace_id": "ctw-wrapper-finish-id413"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "13 layer-tagged sources; success+0->OK semantics proven live; published_at != discovered_at verified"
+    },
+    {
+      "backup_recovery_evidence": [
+        "backups-pre-punkt/fpc_pre_punkt_20260826T0945Z_experimental.db sha256:fd41abd6ed1ed1f781d9f258e2ea3e78312f27a688ce105bd1ca4f222b9aea12",
+        "CLI backup_post_punkt_20260826T1050Z.db sha256:e38f75982fbd9696afcabfac13d8dcef51d86e6525cb3e74be7e975ec0d36642"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "punkt compose service + script case + cron line are host-local enablement deltas vs upstream commit"
+      ],
+      "clank_id": "feature-phone-clank",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "NEW_EPOCH",
+        "epoch_id": "fpc-epoch-2",
+        "evidence_refs": [
+          "experimental store carries no production history by design"
+        ]
+      },
+      "datastore": {
+        "identity": "docker volume feature_phone_clank_experimental_data::feature_phone_clank_experimental.db",
+        "path_or_volume": "volume:feature_phone_clank_experimental_data",
+        "schema_revision": "schema_migrations v4"
+      },
+      "deployment": {
+        "deployed_commit_sha": "5bb5a32843ec33ce41b300227c267acdf45774e3",
+        "environment": "experimental",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T10:57:00Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "fpc-hetzner-experimental-cron-01",
+      "lane_id": "experimental",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T10:57:00Z",
+        "evidence_ref": "per-source controlled cycles ok (itel 6, lava 11, punkt 1-new/0-event); cron path end-to-end proven"
+      },
+      "notification_capability": "unsupported_by_structure (no notifier wired in run-experimental)",
+      "rollback_surface": "image feature-phone-clank-experimental:49eab25 retained; script/compose/cron reversible",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": null,
+          "invoked_at": "2026-08-26T11:45:01Z",
+          "trace_id": "fpc-exp-punkt-cron-20260826T1145Z"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "itel-india + lava-india + punkt-ch experimental only; punkt first-seen created 0 events (Law 1 proven live); zero notifications ever (table count 0)"
+    },
+    {
+      "backup_recovery_evidence": [
+        "backups-pre-expansion/fpc_pre_expansion_20260826T0945Z_prod.db sha256:831f5810c5652b550bf8a1537eb99b8ea4a590541a7bf071de8165eb5e4b7f0d",
+        "new CLI backup backup_post_expansion_20260826T1050Z.db sha256:bc2ffc54c07f48abc4d5c487c08fefd9e443f0f55d8200c2759096dd0bca08b2"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "hmd.com ReadTimeout pattern (health-honest failures)",
+        "host-local deployment deltas documented"
+      ],
+      "clank_id": "feature-phone-clank",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "NEW_EPOCH",
+        "epoch_id": "fpc-epoch-2",
+        "evidence_refs": [
+          "repo continuity seed canon; lost prior epoch remains UNKNOWN"
+        ]
+      },
+      "datastore": {
+        "identity": "docker volume feature_phone_clank_staging_data::feature_phone_clank.db (epoch fpc-epoch-2)",
+        "path_or_volume": "volume:feature_phone_clank_staging_data",
+        "schema_revision": "schema_migrations v4"
+      },
+      "deployment": {
+        "deployed_commit_sha": "5bb5a32843ec33ce41b300227c267acdf45774e3",
+        "environment": "production",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T10:07:00Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "fpc-hetzner-prod-cron-01",
+      "lane_id": "production",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T10:07:00Z",
+        "evidence_ref": "controlled production cycle 2026-08-26T10:01Z status ok; continuity registry epoch_id=fpc-epoch-2 event_count=0 hash_mismatches=[]"
+      },
+      "notification_capability": "unsupported_by_participant_on_deployed_revision",
+      "rollback_surface": "image feature-phone-clank:d5d9344 retained; backups kept",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "UNKNOWN",
+          "SCHEDULER_FIRED": "UNKNOWN",
+          "execution_result": null,
+          "invoked_at": null,
+          "trace_id": null
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "hmd-nokia sole production source; first post-restore population 44 products -> 0 events (baseline law held)"
+    },
+    {
+      "backup_recovery_evidence": [
+        "UNKNOWN"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "backup UNKNOWN",
+        "stale legacy db copy in repo dir",
+        "inventory stale"
+      ],
+      "clank_id": "free-game-tracker",
+      "completion_classification": "UNKNOWN",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "CONTINUOUS",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": []
+      },
+      "datastore": {
+        "identity": "container volume newsroom.db (repo-dir copy STALE legacy)",
+        "path_or_volume": "container volume (deploy dir not a git checkout)",
+        "schema_revision": "UNKNOWN"
+      },
+      "deployment": {
+        "deployed_commit_sha": "cec034695d52affc284701fe93966dd7c59c5bcd",
+        "environment": "production",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-21T20:00:40Z"
+      },
+      "evidence_stale": true,
+      "instance_id": "fgt-hetzner-hourly-cron-01",
+      "lane_id": "production",
+      "latest_live_validation": {
+        "at_utc": "2026-08-21T20:00:40Z",
+        "evidence_ref": "phase-2a inspection (STALE)"
+      },
+      "notification_capability": "active (discord webhook env present)",
+      "rollback_surface": ".deployed-id pinned cec0346",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "UNKNOWN",
+          "SCHEDULER_FIRED": "UNKNOWN",
+          "execution_result": null,
+          "invoked_at": null,
+          "trace_id": null
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "hourly docker-compose one-shot"
+    },
+    {
+      "backup_recovery_evidence": [
+        "repo SQLite online-backup CLI present (docs/hetzner-migration.md)"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "SK hynix host-block",
+        "broken historical git origin alias",
+        "runtime var/ inside checkout",
+        "Samsung newsroom editorial filter open",
+        "zdnet/digitaltoday long-run yield assessment pending"
+      ],
+      "clank_id": "korean-tech-wire",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "UNKNOWN_CONTINUITY",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": [
+          "no registry materialized; no destructive event evidenced"
+        ]
+      },
+      "datastore": {
+        "identity": "/opt/korean-tech-wire/var/korean_tech_wire.db",
+        "path_or_volume": "/opt/korean-tech-wire/var/korean_tech_wire.db",
+        "schema_revision": "UNKNOWN"
+      },
+      "deployment": {
+        "deployed_commit_sha": "125c39c863af02b982e5e29310e32e4713e56846",
+        "environment": "staging",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T19:33:13Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "ktw-hetzner-soak-timer-01",
+      "lane_id": "production-staging",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T19:33:13Z",
+        "evidence_ref": "completion campaign: new sources produced articles; existing lanes continued; single 30-min timer authority (fleet-campaign report KTW)"
+      },
+      "notification_capability": "unsupported_by_policy (zero-delivery code base-wide)",
+      "rollback_surface": "git revert to 6e95c290 lineage; timer disable one-liner",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": null,
+          "invoked_at": "2026-08-26T19:33:13Z",
+          "trace_id": "ktw-timer-lasttrigger-20260826T1933Z"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "PRODUCTION: skhynix-korea(HOST-BLOCKED 403 since 2026-08-10), the-elec, etnews-hardware; EXPERIMENTAL: samsung-newsroom-kr, lg-display, zdnet_korea_semi_display, digitaltoday_semi_display"
+    },
+    {
+      "backup_recovery_evidence": [
+        "UNKNOWN"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "backup UNKNOWN",
+        "inventory stale"
+      ],
+      "clank_id": "oem-radar",
+      "completion_classification": "UNKNOWN",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "CONTINUOUS",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": []
+      },
+      "datastore": {
+        "identity": "data/ under checkout (WAL)",
+        "path_or_volume": "/home/deploy/staging/oem-radar/data",
+        "schema_revision": "UNKNOWN"
+      },
+      "deployment": {
+        "deployed_commit_sha": "410313b64b41e430e408c344382720c2e8a04f47",
+        "environment": "staging",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-21T21:42:00Z"
+      },
+      "evidence_stale": true,
+      "instance_id": "oem-radar-hetzner-staging-cron-01",
+      "lane_id": "staging",
+      "latest_live_validation": {
+        "at_utc": "2026-08-21T21:42:00Z",
+        "evidence_ref": "phase-2b convergence evidence (STALE)"
+      },
+      "notification_capability": "active (discord webhook env present)",
+      "rollback_surface": "images oem-radar:578aef9/fe2dc60/0ceb001",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "UNKNOWN",
+          "SCHEDULER_FIRED": "UNKNOWN",
+          "execution_result": null,
+          "invoked_at": null,
+          "trace_id": null
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "staging hourly cron; no-wok-due shape previously attested live"
+    },
+    {
+      "backup_recovery_evidence": [
+        "archived pre-heartbeat snapshots in /home/deploy/archives"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "scheduler-bypass residual flagged for operator decision",
+        "inventory stale"
+      ],
+      "clank_id": "semiconductor-intelligence",
+      "completion_classification": "UNKNOWN",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "CONTINUOUS",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": []
+      },
+      "datastore": {
+        "identity": "semintel_staging_data volume :: semi_intel.db",
+        "path_or_volume": "/var/lib/docker/volumes/semintel_staging_data/_data/semi_intel.db",
+        "schema_revision": "heartbeat migration a0b1c2d3e404 applied"
+      },
+      "deployment": {
+        "deployed_commit_sha": "9dbf06d11cff23961fb11f240b2f2ea94c728777",
+        "environment": "staging",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-21T21:56:00Z"
+      },
+      "evidence_stale": true,
+      "instance_id": "semint-hetzner-hourly-cron-01",
+      "lane_id": "staging",
+      "latest_live_validation": {
+        "at_utc": "2026-08-21T21:56:00Z",
+        "evidence_ref": "phase-2b heartbeat proof (invocation!=commit) (STALE)"
+      },
+      "notification_capability": "none-found-on-host",
+      "rollback_surface": "archives + automation disable supported",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": null,
+          "invoked_at": "2026-08-26T12:40:01Z",
+          "trace_id": "semint-probe-cron-20260826T1240Z"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "hourly cron; OperationalScheduler automation coexists (Law3/5 residual flagged)"
+    },
+    {
+      "backup_recovery_evidence": [
+        "clank_pre2b_20260826T0341Z_staging.db sha256:2225dd487604205ff3b1a78b2a17f89d0cffd9425fc2eae74bcb52805becf021"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "staging/prod shared-execution lock contention possible across lanes (works by design)"
+      ],
+      "clank_id": "smartphone-clank",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "CONTINUOUS",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": []
+      },
+      "datastore": {
+        "identity": "/opt/smartphone-clank/data/clank-staging.db (isolated; adopted/stamped 0007_wave1_baseline_state)",
+        "path_or_volume": "/opt/smartphone-clank/data/clank-staging.db",
+        "schema_revision": "alembic:0007_wave1_baseline_state"
+      },
+      "deployment": {
+        "deployed_commit_sha": "10906e6813781389ddb862368104b8cd5c61a5f2",
+        "environment": "staging",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T03:48:24Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "smartphone-clank-hetzner-soak-01",
+      "lane_id": "staging",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T03:48:24Z",
+        "evidence_ref": "controlled forced staging run discovered 6 models incl SM-S928ULBEXAA; delivery suppression rows recorded"
+      },
+      "notification_capability": "suppressed_by_structure (maturity gate; eligible=0 attempted=0 delivered=0 evidenced x6)",
+      "rollback_surface": "systemctl disable --now smartphone-clank-soak@samsung_us_owners_product.timer; checkout revert",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": "no_work_due",
+          "invoked_at": "2026-08-26T16:49:51Z",
+          "trace_id": "sphone-soak-lasttrigger-20260826T1649Z"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "soak-only member: samsung_us_owners_product (maturity=soak); reachable ONLY via --environment staging"
+    },
+    {
+      "backup_recovery_evidence": [
+        "data/backups/clank_pre2b_20260826T0341Z_prod.db sha256:3005347367d69720a624d6f81ca970f1725a49fae62fb340e05b54e760f83794",
+        "post-deploy clank_post2b_20260826T0400Z_prod.db sha256:46bf8986c75c9656d30c8fc71e50b461f3ea85062275c01ac0d18dad96f1840e"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "main.py db backup ignores CLANK_CONFIG",
+        "one unexplained early systemd timer activation during daemon-reload (impact nil, root cause UNKNOWN)"
+      ],
+      "clank_id": "smartphone-clank",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "CONTINUOUS",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": []
+      },
+      "datastore": {
+        "identity": "/opt/smartphone-clank/data/clank.db (alembic 0007_wave1_baseline_state)",
+        "path_or_volume": "/opt/smartphone-clank/data/clank.db",
+        "schema_revision": "alembic:0007_wave1_baseline_state"
+      },
+      "deployment": {
+        "deployed_commit_sha": "10906e6813781389ddb862368104b8cd5c61a5f2",
+        "environment": "production",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T03:55:00Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "smartphone-hetzner-opt-timers-01",
+      "lane_id": "production",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T03:55:00Z",
+        "evidence_ref": "deployment pass: prod-vs-pre2b 31 tables 0-diff snapshot; suite 234 passed 1 skipped; conformance 10/10"
+      },
+      "notification_capability": "active_gated (Discord webhooks configured; source-maturity gate fail-closed)",
+      "rollback_surface": "git checkout 44ed235; pre-deployment recovery point verified",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": null,
+          "invoked_at": "2026-08-26T16:49:51Z",
+          "trace_id": "sphone-prod-samsung-lasttrigger-20260826T1649Z"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "8 production sources incl. samsung_us_support_sitemap; zero soak members in production scope (test-enforced)"
+    },
+    {
+      "backup_recovery_evidence": [
+        "sw_pre_7a5e551_20260826T1105Z.db sha256:81967fca7cf8ebae1ee5594082fae1bfdf3dd31343f942547ff7f6a2a5f79336",
+        "sw_post_7a5e551_20260826T1110Z.db sha256:f67108d5fc36b5bef1114a366fa987a59d9fa2f9f9f11fb1c8bf6b724087a615 (independently opened, counts matched)"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "cli backup dict(Path) crash fixed upstream at 29aeeb0; host image redeploy pending (cron lane unaffected)"
+      ],
+      "clank_id": "smartwatch-clank",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [
+          "sw-20260823-volume-loss-0001",
+          "sw-20260823-restore-from-backup-0002",
+          "sw-20260818-observation-gap-0003"
+        ],
+        "continuity_state": "RESTORED_HISTORY",
+        "epoch_id": "sw-epoch-1-restored",
+        "evidence_refs": [
+          "registry /app/data/continuity/continuity-events.jsonl sha256:2116b03de842b63090edd1f492e4a7647cb45143e645344b97d6f6f9bf447fb7 status OK hash_mismatches []"
+        ]
+      },
+      "datastore": {
+        "identity": "RESTORED authoritative sqlite on volume smartwatch_clank_staging_data (sw-epoch-1-restored; schema_version row stamped 2026-08-18T12:37:49Z)",
+        "path_or_volume": "volume:smartwatch_clank_staging_data/smartwatch-clank.sqlite3",
+        "schema_revision": "2"
+      },
+      "deployment": {
+        "deployed_commit_sha": "7a5e551bd6cdd313b142ccbdb977a717f2a083a0",
+        "environment": "staging",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T11:05:00Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "smartwatch-hetzner-cron-lane-01",
+      "lane_id": "staging",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T11:05:00Z",
+        "evidence_ref": "cycle e764eb936054474faa2360c28fcb8490 @2026-08-26T11:03Z healthy=4 failed=0"
+      },
+      "notification_capability": "unsupported_by_policy (notify raises NotImplementedError; suppressed_by_structure)",
+      "rollback_surface": "images smartwatch-clank:20d5d0d retained; continuity registry append-only outside DB",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": null,
+          "invoked_at": "2026-08-26T11:50:01Z",
+          "trace_id": "sw-probe-cron-20260826T1150Z"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "production allowlist: samsung_product_catalogue, support_in/gb/de; controlled cycle pure re-sight (430 obs, 0 discoveries, 0 events, host_migration null)"
+    },
+    {
+      "backup_recovery_evidence": [
+        "tablet_pre_d2ab5ba_20260826T1100Z.db sha256:9b42655d87725b107b5d22cba45b2ba23f7f93cea256660745551d50d2aad246",
+        "tablet_post_cycle_20260826T1115Z.db sha256:7cf1ab74f7b406bed498adafe2e153d0f6f7a165e3ae01dc5209fcef905afcf0 + isolated restore drill passed + overwrite-refusal passed"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "backup -shm/-wal sidecar hygiene",
+        "long-term Honor bot friction UNKNOWN"
+      ],
+      "clank_id": "tablet-clank",
+      "completion_classification": "LIVE_COMPLETE_BOUNDED_DEBT",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "UNKNOWN_CONTINUITY",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": [
+          "no ADR-0006 registry materialized on host at d2ab5ba"
+        ]
+      },
+      "datastore": {
+        "identity": "/home/deploy/experimental/tablet-clank/var/tablet_clank.db (existing soak lineage reused; schema v1)",
+        "path_or_volume": "/home/deploy/experimental/tablet-clank/var/tablet_clank.db",
+        "schema_revision": "1"
+      },
+      "deployment": {
+        "deployed_commit_sha": "d2ab5ba9ba40ff45b04738ec8e88fac62f13797e",
+        "environment": "staging",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-26T10:50:00Z"
+      },
+      "evidence_stale": false,
+      "instance_id": "tablet-hetzner-production-timer-01",
+      "lane_id": "production-cycle",
+      "latest_live_validation": {
+        "at_utc": "2026-08-26T10:50:00Z",
+        "evidence_ref": "two canonical cycles 2026-08-26T10:47Z/10:49Z: 81 accepted, exactly 1 genuine event (TCL TAB A1), integrity ok, duplicates 0; systemd service exit 0/SUCCESS"
+      },
+      "notification_capability": "unsupported_by_policy (ALERTS_ENABLED=False constant; runtime refusal if enabled)",
+      "rollback_surface": "unit files removable; images/venv-old retained; recovery points intact",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "YES",
+          "SCHEDULER_FIRED": "YES",
+          "execution_result": "completed",
+          "invoked_at": "2026-08-26T18:20:45Z",
+          "trace_id": "tablet-lasttrigger-20260826T1820Z"
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "allowlist honor_cn_tablets_catalogue, honor_cn_tablets_comparison, tcl_global_tablets (pre-existing membership preserved unchanged); apple_in disabled; 4 others EXPERIMENTAL unregistered-in-lane"
+    },
+    {
+      "backup_recovery_evidence": [
+        "docker image lineage f0b327a..938cc62 retained"
+      ],
+      "blocking_debt": [],
+      "bounded_debt": [
+        "inventory fields stale as_of 2026-08-22"
+      ],
+      "clank_id": "watch-clank",
+      "completion_classification": "UNKNOWN",
+      "continuity": {
+        "active_event_ids": [],
+        "continuity_state": "CONTINUOUS",
+        "epoch_id": "UNKNOWN",
+        "evidence_refs": []
+      },
+      "datastore": {
+        "identity": "UNKNOWN-host-path-under-anilganti",
+        "path_or_volume": "UNKNOWN",
+        "schema_revision": "UNKNOWN"
+      },
+      "deployment": {
+        "deployed_commit_sha": "f0b327acc9970221de230c68d4bc03480d853a46",
+        "environment": "production",
+        "host": "ubuntu-4gb-hel1-1",
+        "verified_at_utc": "2026-08-21T21:05:00Z"
+      },
+      "evidence_stale": true,
+      "instance_id": "watch-hetzner-user-timers-01",
+      "lane_id": "production",
+      "latest_live_validation": {
+        "at_utc": "2026-08-21T21:05:00Z",
+        "evidence_ref": "diagnostic inventory phase-2a inspection (STALE - not refreshed by completion campaign)"
+      },
+      "notification_capability": "active (discord editorial+health via secrets env)",
+      "rollback_surface": "prior image tags",
+      "scheduler": {
+        "attestation": {
+          "PROCESS_STARTED": "UNKNOWN",
+          "SCHEDULER_FIRED": "UNKNOWN",
+          "execution_result": null,
+          "invoked_at": null,
+          "trace_id": null
+        },
+        "authority": "UNKNOWN",
+        "cadence_seconds": null,
+        "type": "UNKNOWN"
+      },
+      "source_maturity_summary": "legacy clank; x19 user timers; adapter onboarded read-only"
+    }
+  ],
+  "schema_version": "1"
+}
