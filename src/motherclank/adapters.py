@@ -108,6 +108,16 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
         "db": "semiconductor_intelligence.db",
         "qc": False,
     },
+    # P-4.6: tenth lane. Intentionally RETIRED — finite soak completed,
+    # Promotion Wave 1 moved Honor/TCL to manual/on-demand production.
+    # No active scheduler by design; obsolete soak unit file proves nothing.
+    # Native collector_runs substrate; schema_migrations for versioning.
+    "tablet-clank": {
+        "module": "clank_fleet.adapters.tablet_clank",
+        "class": "TabletClankAdapter",
+        "db": "tablet_clank.db",
+        "qc": False,
+    },
 }
 
 

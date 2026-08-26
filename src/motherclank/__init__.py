@@ -18,4 +18,6 @@ SNAPSHOT_SCHEMA_VERSION = 1
 # the single source of truth for membership; this tuple exists so humans
 # grepping the package find the current observer set.
 ONBOARDED = ("watch-clank", "smartphone-clank", "korean-tech-wire",
-             "feature-phone-clank", "smartwatch-clank", "oem-radar")
+             "feature-phone-clank", "smartwatch-clank", "oem-radar",
+             "free-game-tracker", "chinese-tech-wire",
+             "semiconductor-intelligence", "tablet-clank")
