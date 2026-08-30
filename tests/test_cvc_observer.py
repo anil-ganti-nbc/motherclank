@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from motherclank import adapters
 from motherclank import snapshot as snap
 from motherclank import synthesis as syn
@@ -64,8 +66,12 @@ def _inventory(tmp_path: Path) -> Path:
 
 def _diagnostic_root() -> Path:
     configured = os.environ.get("MOTHERCLANK_ADAPTER_ROOT")
-    assert configured, "MOTHERCLANK_ADAPTER_ROOT must point at the Diagnostic checkout"
-    return Path(configured)
+    root = (Path(configured) if configured else
+            Path(__file__).resolve().parents[1] / "diagnostic-clank")
+    adapter_path = root / "clank-fleet" / "src" / "clank_fleet" / "adapters" / "cvc_clank.py"
+    if not adapter_path.exists():
+        pytest.skip("Diagnostic checkout with the CVC adapter is not available")
+    return root
 
 
 def test_manifest_resolves_cvc_once_and_registry_instantiates_it(tmp_path: Path) -> None:

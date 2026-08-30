@@ -239,6 +239,13 @@ def build_adapters(real_state_dir: Path,
 
     for cid in sorted(registry):
         entry = registry[cid]
+        # CVC is a separately checked-out observer root. Legacy callers that
+        # do not provide the canonical inventory or an explicit CVC root keep
+        # the historical registry-only adapter plane; a manifest-selected CVC
+        # lane still fails loudly if its adapter plane is unavailable.
+        if (entry.get("path_kind") == "cvc_root"
+                and inventory_path is None and cvc_root is None):
+            continue
         module = __import__(entry["module"], fromlist=[entry["class"]])
         cls = getattr(module, entry["class"])
         kwargs: dict[str, Any] = {"db_path": d / entry["db"]}
