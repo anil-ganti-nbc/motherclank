@@ -118,6 +118,15 @@ BUILTIN_REGISTRY: dict[str, dict[str, Any]] = {
         "db": "tablet_clank.db",
         "qc": False,
     },
+    # Institutional-memory observer. The manifest-driven harvest supplies
+    # the explicit CVC root; this is not a participant DB or collector lane.
+    "cvc-clank": {
+        "module": "clank_fleet.adapters.cvc_clank",
+        "class": "CVCClankAdapter",
+        "db": "cvc-clank",
+        "qc": False,
+        "path_kind": "cvc_root",
+    },
 }
 
 
@@ -127,6 +136,9 @@ class AdapterPlaneUnavailable(RuntimeError):
 
 def _candidate_roots(explicit: Path | None) -> list[Path]:
     roots: list[Path] = []
+    configured = os.environ.get("MOTHERCLANK_ADAPTER_ROOT")
+    if configured:
+        roots.append(Path(configured))
     if explicit:
         roots.append(explicit)
         if (explicit / "diagnostic-clank").exists():
@@ -186,6 +198,7 @@ def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str
             "class": entry["class"],
             "db": entry["db"],
             "qc": bool(entry.get("qc", False)),
+            "path_kind": entry.get("path_kind"),
         }
     # Duplicate store identity (final sweep, builtin included): two lanes
     # pointing at one DB file would silently cross-contaminate evidence.
@@ -202,12 +215,22 @@ def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str
 
 def build_adapters(real_state_dir: Path,
                    diagnostic_clank_path: Path | None = None,
-                   registry_path: Path | str | None = None) -> dict[str, object]:
+                   registry_path: Path | str | None = None,
+                   inventory_path: Path | str | None = None,
+                   cvc_root: Path | str | None = None) -> dict[str, object]:
     """Instantiate every registered observer adapter against read-only DB copies."""
     ensure_adapter_plane(diagnostic_clank_path)
     registry = load_registry(registry_path)
     if not registry:
         raise AdapterPlaneUnavailable("effective adapter registry is empty")
+    if inventory_path is not None:
+        from .registry_shim import clank_ids_from_inventory
+
+        members = set(clank_ids_from_inventory(Path(inventory_path)))
+        registry = {cid: entry for cid, entry in registry.items() if cid in members}
+        if not registry:
+            raise AdapterPlaneUnavailable(
+                "inventory contains no adapter-resolvable registered Clanks")
     d = real_state_dir
     adapters: dict[str, Any] = {}
     qc_ids: list[str] = []
@@ -218,7 +241,12 @@ def build_adapters(real_state_dir: Path,
         entry = registry[cid]
         module = __import__(entry["module"], fromlist=[entry["class"]])
         cls = getattr(module, entry["class"])
-        adapters[cid] = cls(db_path=d / entry["db"])
+        kwargs: dict[str, Any] = {"db_path": d / entry["db"]}
+        if entry.get("path_kind") == "cvc_root":
+            kwargs["root_path"] = (
+                Path(cvc_root).resolve() if cvc_root is not None else d / entry["db"]
+            )
+        adapters[cid] = cls(**kwargs)
         if entry.get("qc"):
             qc_ids.append(cid)
 

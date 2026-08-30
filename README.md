@@ -3,7 +3,7 @@
 Read-only fleet harvester per [ADR-0002](https://github.com/anil-ganti-nbc/clank-architecture/blob/main/adr/0002-motherclank-supervisory-architecture.md).
 
 ```
-motherclank harvest --inventory fleet.yaml --real-state DIR [--out DIR] [--dry-run] [--adapters-src PATH]
+motherclank harvest --inventory fleet.yaml --real-state DIR [--out DIR] [--dry-run] [--adapters-src PATH] [--cvc-root PATH]
 ```
 
 - Consumes the Diagnostic-Clank-owned read-only adapters **unchanged** (located as
@@ -18,6 +18,9 @@ motherclank harvest --inventory fleet.yaml --real-state DIR [--out DIR] [--dry-r
   derived Markdown report (`var/reports/fleet-*.md`). `--dry-run` writes nothing.
 - UNKNOWN is preserved verbatim; missing data never becomes healthy/zero.
 - Adapter failures are isolated to their Clank block; the fleet snapshot always completes.
+- CVC Clank is an observer-tier institutional-memory lane. With `--cvc-root`,
+  Motherclank reads its bounded corpus/integrity snapshot; CVC has no collector
+  freshness, scheduled run, remediation, or participant authority.
 - Every snapshot records inventory revision, adapter contract version,
   `previous_snapshot_hash`, own `content_hash`, and a sqlite `total_changes`
   read-only proof.
@@ -27,6 +30,12 @@ motherclank harvest --inventory fleet.yaml --real-state DIR [--out DIR] [--dry-r
 No DB writes · no Clank mutations · no notifications · no locks on Clank stores ·
 no shared databases · no remediation · no QC learning · no control actions.
 The package source is scanned by tests for mutation/notification interfaces.
+
+The canonical fleet manifest filters which registered lanes are harvested.
+CVC's `RATIFIED_E4`, `SUPPORTED_E3`, `OPEN_TRIGGER`, `BLOCKED_EVIDENCE`, and
+`HISTORICAL_EVIDENCE` values are evidence summaries, not fleet mandates. A
+future Standards Clank may consume CVC evidence; Standards and the separate
+editorial CVC Workbench are not started by this integration.
 
 ## Host operation (Hetzner)
 

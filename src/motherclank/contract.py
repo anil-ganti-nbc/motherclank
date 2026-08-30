@@ -103,6 +103,8 @@ def _seed_extensions() -> None:
          "provider-collection plane status"),
         ("job_runs_recent", "0.3.1",
          "application-level scheduled job runs"),
+        ("observer_snapshot", "0.3.2",
+         "bounded participant-owned observer summary"),
     ]
     for name, since, desc in seed:
         register_optional_extension(name, since=since, description=desc)

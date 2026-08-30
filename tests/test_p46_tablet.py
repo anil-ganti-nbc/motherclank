@@ -135,7 +135,7 @@ def test_full_pipeline_travel(tmp_path):
     assert claim["state"] in ("HEALTHY", "UNKNOWN")
 
 
-def test_ten_lanes_registered():
+def test_eleven_lanes_registered():
     registry_keys = set(adapters_mod.BUILTIN_REGISTRY.keys())
-    assert len(registry_keys) == 10
+    assert len(registry_keys) == 11
     assert "tablet-clank" in registry_keys

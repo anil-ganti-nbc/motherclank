@@ -46,7 +46,17 @@ def fleet_yaml(tmp_path: Path) -> Path:
     if src:
         target.write_text(src.read_text())
     else:
-        target.write_text("schema_version: '2.0'\nexpected_repositories: []\n")
+        target.write_text(
+            "schema_version: '2.0'\n"
+            "expected_repositories: [watch-clank]\n"
+            "repositories:\n"
+            "  - name: watch-clank\n"
+            "    classification: CLANK\n"
+            "    deployment_state: UNKNOWN\n"
+            "deployments:\n"
+            "  - repository: watch-clank\n"
+            "    deployed_commit_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        )
     return target
 
 
