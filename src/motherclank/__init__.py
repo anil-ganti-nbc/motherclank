@@ -20,4 +20,4 @@ SNAPSHOT_SCHEMA_VERSION = 1
 ONBOARDED = ("watch-clank", "smartphone-clank", "korean-tech-wire",
              "feature-phone-clank", "smartwatch-clank", "oem-radar",
              "free-game-tracker", "chinese-tech-wire",
-             "semiconductor-intelligence", "tablet-clank")
+             "semiconductor-intelligence", "tablet-clank", "cvc-clank")

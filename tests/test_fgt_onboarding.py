@@ -171,7 +171,12 @@ def test_every_registered_adapter_emits_canonical_capability_states(tmp_path):
         validate_capability_states
     failures = {}
     for cid, entry in adapters_mod.BUILTIN_REGISTRY.items():
-        module = __import__(entry["module"], fromlist=[entry["class"]])
+        try:
+            module = __import__(entry["module"], fromlist=[entry["class"]])
+        except ModuleNotFoundError:
+            if entry.get("path_kind") == "cvc_root":
+                continue  # optional cross-repository observer plane
+            raise
         adapter_cls = getattr(module, entry["class"])
         if not hasattr(adapter_cls, "capability_states"):
             failures[cid] = "missing capability_states()"

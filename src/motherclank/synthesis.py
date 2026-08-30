@@ -138,9 +138,13 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
         if age_h > stale_hours:
             recency_state = "UNKNOWN"
             note(f"recency.age_hours>{stale_hours} ({age_h:.1f}h)")
-    elif op_state in ("healthy", "degraded"):
+    elif op_state in ("healthy", "degraded") and str(
+            (status.get("extensions") or {}).get("recency_policy", "")
+    ).upper() != "NONE":
         recency_state = "UNKNOWN"
         note("recency.no_run_timestamp_available")
+    elif op_state in ("healthy", "degraded"):
+        note("recency.policy=NONE")
 
     # Combine: worst of (declared, source-evidence); UNKNOWN when neither
     # evidences anything; recency then may ONLY downgrade to UNKNOWN.

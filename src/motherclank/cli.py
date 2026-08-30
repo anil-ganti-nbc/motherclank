@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="path to diagnostic-clank checkout if not a workspace sibling")
     h.add_argument("--adapter-registry", type=Path, default=None,
                     help="optional adapter registry file (JSON/YAML); extends builtin set")
+    h.add_argument("--cvc-root", type=Path, default=None,
+                    help="explicit CVC workspace root for the cvc-clank observer")
     h.add_argument("--out", type=Path, default=Path("var"), help="output directory")
     h.add_argument("--dry-run", action="store_true",
                    help="compute and print; write nothing")
@@ -368,8 +370,13 @@ def _harvest(args) -> int:
         print(f"inventory missing: {args.inventory}", file=sys.stderr)
         return 3
     try:
-        built = build_adapters(args.real_state,
-                               registry_path=getattr(args, "adapter_registry", None))
+        built = build_adapters(
+            args.real_state,
+            diagnostic_clank_path=getattr(args, "adapters_src", None),
+            registry_path=getattr(args, "adapter_registry", None),
+            inventory_path=args.inventory,
+            cvc_root=getattr(args, "cvc_root", None),
+        )
     except AdapterPlaneUnavailable as exc:
         print(f"adapter plane unavailable: {exc}", file=sys.stderr)
         return 4

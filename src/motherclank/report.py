@@ -47,17 +47,21 @@ def render_report(payload: dict[str, Any]) -> str:
             lines.append(f"| {cid} | ADAPTER_FAILED | - | - | - | {block.get('error', '')[:80]} |")
             continue
         rollup = source_rollup(block.get("health"))
-        if rollup.get("unsupported"):
+        status_extensions = (block.get("status") or {}).get("extensions", {})
+        integrity_observer = status_extensions.get("health_semantics") == "integrity"
+        if integrity_observer:
+            src = "integrity"
+        elif rollup.get("unsupported"):
             src = "unsupported"
         elif rollup.get("no_sources_recorded"):
             src = "UNKNOWN"
         else:
             src = "/".join(str(rollup[k]) for k in ("ok", "degraded", "failed", "blocked_zero", "unknown"))
         events = block.get("event_summary") or {}
-        ev = _fmt(events.get("events_total")) if isinstance(events, dict) else _UNKNOWN
+        ev = "-" if integrity_observer else (_fmt(events.get("events_total")) if isinstance(events, dict) else _UNKNOWN)
         qc = block.get("qc_summary") or {}
         qc_disp = qc.get("dispositions") if isinstance(qc, dict) else None
-        qc_s = _fmt(qc_disp)
+        qc_s = "-" if integrity_observer else _fmt(qc_disp)
         notes_parts = []
         lr = block.get("last_run")
         if isinstance(lr, dict) and lr.get("status"):
@@ -65,6 +69,17 @@ def render_report(payload: dict[str, Any]) -> str:
         epoch = block.get("current_epoch")
         if epoch is None and "current_epoch" in block:
             notes_parts.append("epoch=UNKNOWN")
+        if integrity_observer:
+            summary = (block.get("observer_snapshot") or {}).get("summary", {})
+            if isinstance(summary, dict):
+                notes_parts.append(
+                    "integrity={}; rules={}; ratified_e4={}; open_triggers={}".format(
+                        summary.get("integrity", _UNKNOWN),
+                        summary.get("rules", _UNKNOWN),
+                        summary.get("ratified_e4", _UNKNOWN),
+                        summary.get("open_triggers", _UNKNOWN),
+                    )
+                )
         lines.append(f"| {cid} | {_state_of(block)} | {src} | {ev} | {qc_s} | {'; '.join(notes_parts) or '-'} |")
     lines.append("")
     lines.append("_All values are as observed by read-only adapters; UNKNOWN means the")

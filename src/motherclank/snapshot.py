@@ -136,7 +136,7 @@ def db_readonly_proof(paths: list[Path]) -> dict[str, int]:
     """Direct evidence of zero mutations: sqlite total_changes per opened DB."""
     proof = {}
     for pth in paths:
-        if not pth.exists():
+        if not pth.exists() or not pth.is_file():
             continue
         con = sqlite3.connect(f"file:{pth.resolve().as_posix()}?mode=ro", uri=True)
         proof[pth.name] = con.total_changes
