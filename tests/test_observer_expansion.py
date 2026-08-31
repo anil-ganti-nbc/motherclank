@@ -188,6 +188,20 @@ def test_golden_bc_lanes_are_separate_identities_and_dormant_is_inert():
     # represented by the honest verification_status marker above.
 
 
+def test_finite_soak_does_not_manufacture_current_liveness():
+    """FINITE_SOAK skips cadence enforcement; that must not be persisted as CURRENT."""
+    from motherclank import liveness as live
+    soak = live.make_expectation(
+        expectation_id="EXP-OEM-SOAK", clank_id="oem-radar",
+        instance_id="oem-radar-hetzner-bankai-exp-timer-01", lane_id="experimental",
+        policy="FINITE_SOAK", cadence_seconds=21600, authority="oem-bankai-exp-timer")
+    lv = live.derive_liveness(_ok_block("2026-07-01T00:00:00Z"), soak,
+                              observed_at="2026-08-24T06:00:00Z")
+    assert lv["liveness_state"] == "UNKNOWN"
+    assert "CURRENT" not in lv["liveness_state"]
+    assert "cadence enforcement not applied" in lv.get("notes", "")
+
+
 def _ok_block(finished_at):
     return {
         "clank_version": "1",

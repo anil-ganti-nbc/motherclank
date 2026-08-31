@@ -55,7 +55,7 @@ _RULES: dict[str, dict[str, str]] = {
                    "no earlier healthy baseline exists to compare against. Escalate "
                    "only if a streak rule fires."),
     },
-    "STALE_RUN_ACTIVE": {
+    "STALE_RUN": {
         "category": "DEPLOYMENT_SCHEDULER_INSPECTION",
         "priority": "P1",
         "title": "Stale run detected on {clank}",

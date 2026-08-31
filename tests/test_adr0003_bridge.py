@@ -117,7 +117,7 @@ def _dc_src():
 # -- dedup / version series ----------------------------------------------------
 
 def test_identical_emission_dedups(tmp_path, registry):
-    batch = _batch([_anom("STALE_RUN_ACTIVE", "watch-clank", "lane-1")])
+    batch = _batch([_anom("STALE_RUN", "watch-clank", "lane-1")])
     payload = recs.build_batch(tmp_path, batch, recs.derive_recommendations(batch))
     db = tmp_path / "inbox.db"
     s1 = bridge_recommendations(payload, inbox_db_path=db, registry=registry,
@@ -172,7 +172,7 @@ def test_severity_lifecycle_changes_preserve_external_ref(tmp_path, registry):
 def test_recommendation_id_stable_across_rules_version_bump(tmp_path, monkeypatch):
     """rule_key/clank_id/subject_group unchanged -> same recommendation_id,
     regardless of RULES_VERSION. Enforced by ADR-0003 §2.3."""
-    batch = _batch([_anom("STALE_RUN_ACTIVE", "watch-clank", "lane-1")])
+    batch = _batch([_anom("STALE_RUN", "watch-clank", "lane-1")])
     rid_v1 = recs.derive_recommendations(batch)[0]["recommendation_id"]
     monkeypatch.setattr(recs, "RULES_VERSION", "m3-r2")
     rid_v2 = recs.derive_recommendations(batch)[0]["recommendation_id"]
@@ -180,7 +180,7 @@ def test_recommendation_id_stable_across_rules_version_bump(tmp_path, monkeypatc
 
 
 def test_render_is_deterministic(tmp_path):
-    batch = _batch([_anom("STALE_RUN_ACTIVE", "watch-clank", "lane-1")])
+    batch = _batch([_anom("STALE_RUN", "watch-clank", "lane-1")])
     rec = recs.derive_recommendations(batch)[0]
     assert render_recommendation_text(rec, batch) == render_recommendation_text(rec, batch)
 
@@ -190,7 +190,7 @@ def test_render_is_deterministic(tmp_path):
 def test_cli_recommend_local_markdown_still_works(tmp_path, monkeypatch, capsys):
     var_dir = tmp_path / "var"
     (var_dir / "anomalies").mkdir(parents=True)
-    batch = _batch([_anom("STALE_RUN_ACTIVE", "watch-clank", "lane-1")])
+    batch = _batch([_anom("STALE_RUN", "watch-clank", "lane-1")])
     (var_dir / "anomalies" / "2026-08-22.jsonl").write_text(
         json.dumps(batch) + "\n")
     from motherclank.cli import main
@@ -204,7 +204,7 @@ def test_cli_recommend_local_markdown_still_works(tmp_path, monkeypatch, capsys)
 def test_cli_dry_run_zero_writes(tmp_path, monkeypatch, capsys):
     var_dir = tmp_path / "var"
     (var_dir / "anomalies").mkdir(parents=True)
-    batch = _batch([_anom("STALE_RUN_ACTIVE", "watch-clank", "lane-1")])
+    batch = _batch([_anom("STALE_RUN", "watch-clank", "lane-1")])
     (var_dir / "anomalies" / "2026-08-22.jsonl").write_text(json.dumps(batch) + "\n")
     inbox_db = tmp_path / "inbox.db"
     from motherclank.cli import main
@@ -219,7 +219,7 @@ def test_cli_dry_run_zero_writes(tmp_path, monkeypatch, capsys):
 def test_cli_bridges_to_inbox_when_given(tmp_path, capsys, fleet_yaml):
     var_dir = tmp_path / "var"
     (var_dir / "anomalies").mkdir(parents=True)
-    batch = _batch([_anom("STALE_RUN_ACTIVE", "watch-clank", "lane-1")])
+    batch = _batch([_anom("STALE_RUN", "watch-clank", "lane-1")])
     (var_dir / "anomalies" / "2026-08-22.jsonl").write_text(json.dumps(batch) + "\n")
     inbox_db = tmp_path / "inbox.db"
     from motherclank.cli import main
@@ -293,7 +293,7 @@ def test_no_hardcoded_membership_constant_remains():
 def _cli_env(tmp_path, fleet_yaml, monkeypatch=None):
     var_dir = tmp_path / "var"
     (var_dir / "anomalies").mkdir(parents=True)
-    batch = _batch([_anom("STALE_RUN_ACTIVE", "watch-clank", "lane-1")])
+    batch = _batch([_anom("STALE_RUN", "watch-clank", "lane-1")])
     (var_dir / "anomalies" / "2026-08-22.jsonl").write_text(json.dumps(batch) + "\n")
     return var_dir
 

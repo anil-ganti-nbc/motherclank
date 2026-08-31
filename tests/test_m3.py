@@ -58,8 +58,11 @@ def test_first_observation_degraded_maps_to_watch():
 
 
 def test_scheduler_classes_map_to_inspection():
-    for atype in ("STALE_RUN_ACTIVE",):
-        pass
+    recs = derive_recommendations(_batch([
+        _anom("STALE_RUN", "watch-clank", "*")]))
+    assert recs[0]["category"] == "DEPLOYMENT_SCHEDULER_INSPECTION"
+    assert recs[0]["rule_key"] == "STALE_RUN"
+    assert recs[0]["status"] == "ACTIVE"
     recs = derive_recommendations(_batch([
         _anom("SCHEDULER_INVOCATION_WITHOUT_WORK", "semiconductor-intelligence",
               "operational-scheduler")]))
