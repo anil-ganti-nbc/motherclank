@@ -297,10 +297,11 @@ def derive_liveness(block: dict[str, Any], expectation: dict[str, Any] | None,
         result["liveness_state"] = "INTENTIONALLY_DORMANT"
         return result
     if policy == "FINITE_SOAK":
-        # finite soaks are expected to stop; only staleness-with-expectation
-        # would be anomalous, and soak completion belongs to the soak plane
-        result["liveness_state"] = "CURRENT"
-        result["notes"] = "finite-soak policy: cadence enforcement not applied"
+        # finite soaks are expected to stop; cadence enforcement is not
+        # applied here and soak completion belongs to the soak plane.
+        # Absence of cadence enforcement is NOT evidence the lane is CURRENT.
+        result["notes"] = ("finite-soak policy: cadence enforcement not applied; "
+                           "liveness remains UNKNOWN without consulted run evidence")
         return result
 
     # Grace is PER-EXPECTATION, never universal law: a 30-minute timer and a

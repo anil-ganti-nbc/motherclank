@@ -11,8 +11,8 @@ def git(*args):
     return r.stdout.strip() if r.returncode == 0 else "N/A"
 
 print("=== MOTHERCLANK OBSERVER SANITY CHECK ===")
-print(f"deployed SHA: {git('rev-parse', '--short', 'HEAD')}")
-print(f"canonical SHA: {git('rev-parse', '--short', 'origin/main')}")
+print(f"checkout HEAD (not a deployed SHA): {git('rev-parse', '--short', 'HEAD')}")
+print(f"origin/main HEAD (not a deployed SHA): {git('rev-parse', '--short', 'origin/main')}")
 
 sys.path.insert(0, str(MC / "src"))
 
