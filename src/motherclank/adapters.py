@@ -200,6 +200,13 @@ def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str
         if all(field in entry for field in identity_fields):
             registry[str(cid)].update({field: entry[field]
                                        for field in identity_fields})
+        if "expected_schema_version" in entry:
+            version = entry["expected_schema_version"]
+            if not isinstance(version, (str, int)) or isinstance(version, bool) \
+                    or not str(version).strip():
+                raise AdapterPlaneUnavailable(
+                    f"registry row {cid!r} has invalid expected_schema_version")
+            registry[str(cid)]["expected_schema_version"] = str(version)
     # Duplicate store identity (final sweep, builtin included): two lanes
     # pointing at one DB file would silently cross-contaminate evidence.
     seen_stores: dict[str, str] = {}
@@ -224,6 +231,7 @@ def build_adapters(real_state_dir: Path,
     d = real_state_dir
     adapters: dict[str, Any] = {}
     expected_identities: dict[str, dict[str, str]] = {}
+    expected_schema_versions: dict[str, str] = {}
     qc_ids: list[str] = []
     versions: dict[str, Any] = {}
     from clank_runtime.version import ADAPTER_CONTRACT_VERSION  # noqa: PLC0415
@@ -238,10 +246,13 @@ def build_adapters(real_state_dir: Path,
                 "instance_id": entry["instance_id"],
                 "lane_id": entry["lane_id"],
             }
+        if "expected_schema_version" in entry:
+            expected_schema_versions[cid] = str(entry["expected_schema_version"])
         if entry.get("qc"):
             qc_ids.append(cid)
 
     versions = {"adapter_contract_version": ADAPTER_CONTRACT_VERSION}
     return {"adapters": adapters, "versions": versions,
             "qc_adapters": qc_ids,
-            "expected_identities": expected_identities}
+            "expected_identities": expected_identities,
+            "expected_schema_versions": expected_schema_versions}

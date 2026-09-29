@@ -11,12 +11,13 @@ import json
 import math
 import re
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 SNAPSHOT_CONTRACT_VERSION = "1.0"
 OBSERVER_CONTRACT_VERSION = "0.2"
+MAX_INTAKE_CLOCK_SKEW_SECONDS = 300
 
 _REQUIRED = frozenset({
     "snapshot_contract_version", "clank_id", "instance_id", "lane_id",
@@ -116,6 +117,11 @@ def _validate_record(record: Any, position: int) -> dict[str, Any]:
     for key in ("child_as_of", "child_as_of_clock", "schema_version",
                 "child_source_revision", "child_deployed_revision"):
         _null_reason(record, key, label)
+    if record["schema_version"] is not None:
+        version = record["schema_version"]
+        _require(isinstance(version, (str, int)) and not isinstance(version, bool)
+                 and bool(str(version).strip()),
+                 f"{label}.schema_version: nonempty string/integer or reasoned null required")
     for key in ("child_source_revision", "child_deployed_revision"):
         if record[key] is not None:
             _require(isinstance(record[key], str)
@@ -137,6 +143,10 @@ def _validate_record(record: Any, position: int) -> dict[str, Any]:
     if outcome == "SUCCESS":
         _require(freshness in ("FRESH", "STALE"),
                  f"{label}: SUCCESS needs FRESH or STALE copy")
+        if "source_total_changes" in record:
+            _require(type(record["source_total_changes"]) is int
+                     and record["source_total_changes"] == 0,
+                     f"{label}: observer-side source writes cannot be current")
         path = Path(_nonempty(record["snapshot_path"],
                               f"{label}.snapshot_path"))
         _require(path.is_absolute() and path != source,
@@ -222,6 +232,77 @@ def verify_adapter_identity(doc: dict[str, Any], source_sha: str | None,
         _require(_sha256(row["adapter_artifact_sha256"],
                          f"{row['clank_id']}.adapter_artifact_sha256") == digest,
                  f"{row['clank_id']}: adapter artifact digest does not match runtime")
+
+
+def utc_now() -> datetime:
+    """Intake clock, kept separate so replay tests can freeze it."""
+    return datetime.now(UTC)
+
+
+def assess_intake(doc: dict[str, Any]) -> tuple[str, dict[str, dict[str, Any]]]:
+    """Re-evaluate freshness at consumption, never trust a past FRESH label.
+
+    A producer's FRESH labels describe its *attempt time*. The same manifest
+    cannot be replayed indefinitely as current input. This check is monotonic:
+    it may downgrade producer freshness but never upgrade it. Bounded clock
+    skew allows a NAS host/container clock difference without accepting an
+    arbitrarily future-dated snapshot or native child run.
+    """
+    now = utc_now().astimezone(UTC)
+    future_limit = now + timedelta(seconds=MAX_INTAKE_CLOCK_SKEW_SECONDS)
+    _require(_timestamp(doc["observed_at"], "manifest.observed_at") <= future_limit,
+             "manifest.observed_at: future beyond intake clock-skew bound")
+    assessed: dict[str, dict[str, Any]] = {}
+    for row in doc["lanes"]:
+        label = row["clank_id"]
+        _require(_timestamp(row["observed_at"], f"{label}.observed_at")
+                 <= future_limit,
+                 f"{label}: producer observation future beyond intake clock-skew bound")
+        for key in ("snapshot_created_at", "child_as_of"):
+            if row[key] is not None:
+                _require(_timestamp(row[key], f"{label}.{key}") <= future_limit,
+                         f"{label}: {key} future beyond intake clock-skew bound")
+
+        copy_state = row["freshness_state"]
+        child_state = row["child_execution_freshness"]
+        reasons: list[str] = []
+        if row["refresh_outcome"] == "SUCCESS":
+            horizon = row["freshness_horizon"]["max_age_seconds"]
+            copy_age = (now - _timestamp(row["snapshot_created_at"],
+                                         f"{label}.snapshot_created_at")).total_seconds()
+            if copy_age > horizon:
+                copy_state = "STALE"
+                reasons.append("COPY_AGE_EXCEEDS_HORIZON_AT_INTAKE")
+            elif copy_state != "FRESH":
+                reasons.append("PRODUCER_MARKED_COPY_STALE")
+            if row["child_as_of"] is None:
+                child_state = "UNKNOWN"
+                reasons.append("NO_NATIVE_CHILD_AS_OF")
+            else:
+                child_age = (now - _timestamp(row["child_as_of"],
+                                              f"{label}.child_as_of")).total_seconds()
+                if child_age > horizon:
+                    child_state = "STALE"
+                    reasons.append("CHILD_AGE_EXCEEDS_HORIZON_AT_INTAKE")
+                elif child_state != "FRESH":
+                    reasons.append("PRODUCER_MARKED_CHILD_NOT_FRESH")
+        else:
+            reasons.append(row["error_code"])
+        # Copy/child clocks alone never establish semantic compatibility.
+        # A successful adapter/schema check in build_snapshot is the only
+        # transition from UNVERIFIED to effective FRESH.
+        effective = ("STALE" if "STALE" in (copy_state, child_state)
+                     else "UNVERIFIED" if row["refresh_outcome"] == "SUCCESS"
+                     and copy_state == "FRESH" and child_state == "FRESH"
+                     else "UNKNOWN")
+        assessed[label] = {
+            "intake_observed_at": now.isoformat(),
+            "intake_freshness_state": copy_state,
+            "intake_child_execution_freshness": child_state,
+            "intake_reasons": reasons,
+            "effective_freshness_state": effective,
+        }
+    return now.isoformat(), assessed
 
 
 def verify_copy(record: dict[str, Any], adapter_path: Path) -> None:

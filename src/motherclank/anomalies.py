@@ -115,7 +115,10 @@ def detect(snapshots: list[dict[str, Any]],
                         "adapter_artifact_sha256", "adapter_package_version",
                         "observer_contract_version", "refresh_outcome",
                         "freshness_state", "child_execution_freshness",
-                        "observed_at", "instance_id", "lane_id")}
+                        "observed_at", "instance_id", "lane_id",
+                        "intake_observed_at", "intake_freshness_state",
+                        "intake_child_execution_freshness",
+                        "effective_freshness_state", "intake_reasons")}
         existing = ledger.get(new["anomaly_id"])
         if existing is None:
             if new["last_seen"] != new["first_seen"]:
@@ -147,6 +150,10 @@ def detect(snapshots: list[dict[str, Any]],
             if isinstance(observation, str) and observation.startswith((
                     "SNAPSHOT_", "CHILD_EXECUTION_")):
                 continue  # missing/stale copy is not a source transition
+            lineage = block.get("snapshot_provenance")
+            if (isinstance(lineage, dict)
+                    and lineage.get("effective_freshness_state") != "FRESH"):
+                continue  # no unverified/replayed copy may generate novelty
             health = block.get("health") or {}
             if isinstance(health, dict) and health.get("observation") == "FAILED_ADAPTER":
                 continue  # partial adapter failure cannot contaminate siblings
@@ -221,6 +228,10 @@ def detect(snapshots: list[dict[str, Any]],
 
         # --- scheduler invocation vs successful work (optional evidence) --
         for cid, block in snap.get("clanks", {}).items():
+            lineage = block.get("snapshot_provenance")
+            if (isinstance(lineage, dict)
+                    and lineage.get("effective_freshness_state") != "FRESH"):
+                continue  # stale/unverified pair cannot establish new anomaly
             pair = block.get("scheduler_pair") or {}
             inv = pair.get("last_scheduler_invocation")
             commit = pair.get("last_successful_job_commit")
@@ -261,10 +272,16 @@ def detect(snapshots: list[dict[str, Any]],
             block = final.get("clanks", {}).get(cid)
             recovered = False
             if block is None:
+                if final.get("snapshot_contract_version"):
+                    continue  # absent governed lane cannot prove recovery
                 recovered = True
             elif isinstance(block.get("observation"), str) and block[
                     "observation"].startswith(("SNAPSHOT_", "CHILD_EXECUTION_")):
                 continue  # observer blindness cannot prove recovery
+            elif (isinstance(block.get("snapshot_provenance"), dict)
+                  and block["snapshot_provenance"].get(
+                      "effective_freshness_state") != "FRESH"):
+                continue  # unverified/replayed copy cannot prove recovery
             elif a["type"] in ("SOURCE_HEALTH_TRANSITION",
                                "SOURCE_DEGRADED_AT_FIRST_OBSERVATION",
                                "PERSISTENT_BLOCKED_STREAK"):

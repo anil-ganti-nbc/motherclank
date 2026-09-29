@@ -21,6 +21,10 @@ def _fmt(value: Any) -> str:
 
 
 def _state_of(clank_block: dict[str, Any]) -> str:
+    provenance = clank_block.get("snapshot_provenance")
+    if (isinstance(provenance, dict)
+            and provenance.get("effective_freshness_state") != "FRESH"):
+        return _UNKNOWN
     observation = clank_block.get("observation")
     if isinstance(observation, str) and observation.startswith((
             "SNAPSHOT_", "CHILD_EXECUTION_")):
@@ -72,16 +76,21 @@ def render_report(payload: dict[str, Any]) -> str:
         lines.append(f"| {cid} | {_state_of(block)} | {src} | {ev} | {qc_s} | {'; '.join(notes_parts) or '-'} |")
     if payload.get("snapshot_contract_version"):
         lines.extend(["", "## ADR-0016 snapshot provenance", "",
-                      "| Clank | Refresh / snapshot / child execution | Copy SHA-256 | Adapter source / artifact |",
-                      "|---|---|---|---|"])
+                      "| Clank | Producer refresh / copy / child | Effective intake copy / child / compatibility | Intake reason | Copy SHA-256 | Adapter source / artifact |",
+                      "|---|---|---|---|---|---|"])
         for cid in sorted(payload.get("clanks", {})):
             p = payload["clanks"][cid].get("snapshot_provenance") or {}
             state = "/".join(str(p.get(key) or _UNKNOWN) for key in (
                 "refresh_outcome", "freshness_state",
                 "child_execution_freshness"))
+            effective = "/".join(str(p.get(key) or _UNKNOWN) for key in (
+                "intake_freshness_state", "intake_child_execution_freshness",
+                "effective_freshness_state"))
+            reason = ", ".join(p.get("intake_reasons") or []) or "-"
             adapter = f"{p.get('adapter_package_sha') or _UNKNOWN} / " \
                       f"{p.get('adapter_artifact_sha256') or _UNKNOWN}"
-            lines.append(f"| {cid} | {state} | {p.get('snapshot_sha256') or _UNKNOWN} | {adapter} |")
+            lines.append(f"| {cid} | {state} | {effective} | {reason} | "
+                         f"{p.get('snapshot_sha256') or _UNKNOWN} | {adapter} |")
     lines.append("")
     lines.append("_All values are as observed by read-only adapters; UNKNOWN means the")
     lines.append("underlying system does not evidence it. Clank databases remain authoritative._")
@@ -121,8 +130,8 @@ def render_synthesis(synth: dict[str, Any]) -> str:
         )
     if any("snapshot_refresh" in c for c in synth.get("clanks", {}).values()):
         lines.extend(["", "## ADR-0016 source provenance", "",
-                      "| Clank | Refresh / snapshot / child execution | Copy SHA-256 | Adapter source / artifact |",
-                      "|---|---|---|---|"])
+                      "| Clank | Producer refresh / copy / child | Effective intake copy / child / compatibility | Intake reason | Copy SHA-256 | Adapter source / artifact |",
+                      "|---|---|---|---|---|---|"])
         for cid in sorted(synth.get("clanks", {})):
             c = synth["clanks"][cid]
             if "snapshot_refresh" not in c:
@@ -131,9 +140,14 @@ def render_synthesis(synth: dict[str, Any]) -> str:
             state = "/".join(str(p.get(key) or _UNKNOWN) for key in (
                 "refresh_outcome", "freshness_state",
                 "child_execution_freshness"))
+            effective = "/".join(str(p.get(key) or _UNKNOWN) for key in (
+                "intake_freshness_state", "intake_child_execution_freshness",
+                "effective_freshness_state"))
+            reason = ", ".join(p.get("intake_reasons") or []) or "-"
             adapter = f"{p.get('adapter_package_sha') or _UNKNOWN} / " \
                       f"{p.get('adapter_artifact_sha256') or _UNKNOWN}"
-            lines.append(f"| {cid} | {state} | {p.get('snapshot_sha256') or _UNKNOWN} | {adapter} |")
+            lines.append(f"| {cid} | {state} | {effective} | {reason} | "
+                         f"{p.get('snapshot_sha256') or _UNKNOWN} | {adapter} |")
     lines += ["", "## Law 9 deployment-drift indicator", ""]
     drift = synth.get("law9_drift") or []
     if not drift:

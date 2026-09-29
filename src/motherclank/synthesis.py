@@ -83,7 +83,9 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
                 "adapter_artifact_sha256", "adapter_package_version",
                 "observer_contract_version", "refresh_outcome",
                 "freshness_state", "child_execution_freshness",
-                "observed_at",
+                "observed_at", "intake_observed_at",
+                "intake_freshness_state", "intake_child_execution_freshness",
+                "effective_freshness_state", "intake_reasons",
             )})
         result = {
             "clank_id": clank_id,
@@ -97,7 +99,10 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
             result["snapshot_refresh"] = {
                 key: snapshot_provenance.get(key) for key in (
                     "refresh_outcome", "freshness_state",
-                    "child_execution_freshness", "error_code")
+                    "child_execution_freshness", "error_code",
+                    "intake_freshness_state",
+                    "intake_child_execution_freshness",
+                    "effective_freshness_state", "intake_reasons")
             }
         return result
 
@@ -115,7 +120,8 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
     if isinstance(snapshot_provenance, dict) and (
             snapshot_provenance.get("refresh_outcome") != "SUCCESS"
             or snapshot_provenance.get("freshness_state") != "FRESH"
-            or snapshot_provenance.get("child_execution_freshness") != "FRESH"):
+            or snapshot_provenance.get("child_execution_freshness") != "FRESH"
+            or snapshot_provenance.get("effective_freshness_state") != "FRESH"):
         note(f"clanks.{clank_id}.snapshot_provenance=NOT_CURRENT")
         return claim("UNKNOWN", ["R0_SNAPSHOT"])
 
@@ -283,10 +289,20 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
     # unknown/malformed/unsupported-major evidence stays visible WITHOUT
     # producing any invented claim.
     envelopes: list[dict[str, Any]] = []
+    withheld_noncurrent = 0
     for block in snapshot_payload.get("clanks", {}).values():
         raw = block.get("evidence_envelopes")
         if isinstance(raw, list):
-            envelopes.extend(e for e in raw if isinstance(e, dict))
+            valid = [e for e in raw if isinstance(e, dict)]
+            provenance = block.get("snapshot_provenance")
+            if (isinstance(provenance, dict)
+                    and provenance.get("effective_freshness_state") != "FRESH"):
+                # The M0 block may retain historical envelopes for audit,
+                # but stale/unverified adapter evidence cannot issue current
+                # typed claims in M1.
+                withheld_noncurrent += len(valid)
+                continue
+            envelopes.extend(valid)
     evidence_derivation = None
     if envelopes:
         from . import evidence as ev
@@ -319,13 +335,15 @@ def synthesize_fleet(snapshot_payload: dict[str, Any], *,
         payload["continuity_registry_hash"] = (
             snapshot_payload.get("continuity_registry_hash")
             or cont.registry_hash(continuity_events))
-    if evidence_derivation is not None:
+    if evidence_derivation is not None or withheld_noncurrent:
         payload["evidence_derivation"] = {
-            "derived_claim_count": len(evidence_derivation.get(
+            "derived_claim_count": len((evidence_derivation or {}).get(
                 "derived_claims", [])),
-            "unknown_evidence": evidence_derivation.get("unknown_evidence",
-                                                        []),
-            "observed_envelope_count": evidence_derivation.get("count", 0),
+            "unknown_evidence": (evidence_derivation or {}).get(
+                "unknown_evidence", []),
+            "observed_envelope_count": (evidence_derivation or {}).get(
+                "count", 0),
+            "withheld_noncurrent_envelope_count": withheld_noncurrent,
         }
     return payload
 

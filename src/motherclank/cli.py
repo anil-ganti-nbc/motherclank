@@ -85,6 +85,9 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--out", type=Path, default=Path("var"))
     q.add_argument("--adapters-src", type=Path, default=None)
     q.add_argument("--adapter-registry", type=Path, default=None)
+    q.add_argument("--snapshot-manifest", type=Path, default=None,
+                   help="declare governed snapshot-v1 input; QC ingestion is "
+                        "blocked for QC-enabled lanes until separately gated")
     q.add_argument("--dry-run", action="store_true")
     sr = sub.add_parser("soak-report", help="periodic QC-soak report + M5 gate scoring (Axis B)")
     sr.add_argument("--var-dir", required=True, type=Path)
@@ -180,12 +183,20 @@ def _load_scheduler_traces(var_dir: Path):
 def _ingest_qc(args) -> int:
     try:
         built = build_adapters(args.real_state,
+                               diagnostic_clank_path=args.adapters_src,
                                registry_path=args.adapter_registry)
     except AdapterPlaneUnavailable as exc:
         print(f"adapter plane unavailable: {exc}", file=sys.stderr)
         return 4
     # ingestion snapshot hash: reuse latest harvest snapshot if present
     latest = syn.read_latest_snapshot(args.var_dir) if hasattr(syn, "read_latest_snapshot") else None
+    if (built["qc_adapters"] and
+            (args.snapshot_manifest is not None or
+             (latest or {}).get("snapshot_contract_version") == "1.0")):
+        print("QC ingestion blocked: governed snapshot-v1 QC lanes need "
+              "independently attested intake freshness before records can "
+              "be appended", file=sys.stderr)
+        return 6
     snap_hash = (latest or {}).get("content_hash", "no-snapshot")
     generated_from = (latest or {}).get("harvested_at_utc") \
         or datetime.now(UTC).isoformat(timespec="seconds")

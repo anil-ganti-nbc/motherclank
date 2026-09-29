@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from motherclank import adapters, anomalies, cli, snapshot, synthesis
+from motherclank import adapters, anomalies, cli, evidence, snapshot, snapshot_manifest, synthesis
 from motherclank.report import render_report, render_synthesis
 from motherclank.snapshot_manifest import SnapshotManifestError, load_manifest
 
@@ -92,7 +92,8 @@ def _case(tmp_path: Path):
     built = {"adapters": {"example-clank": adapter}, "versions": {},
              "qc_adapters": [],
              "expected_identities": {"example-clank": {
-                 "instance_id": "nas-canonical", "lane_id": "production"}}}
+                 "instance_id": "nas-canonical", "lane_id": "production"}},
+             "expected_schema_versions": {"example-clank": "schema-v1"}}
 
     def save():
         manifest.write_text(json.dumps({
@@ -121,6 +122,7 @@ def test_fresh_copy_is_verified_and_propagates_lineage(tmp_path):
     assert payload["snapshot_contract_version"] == "1.0"
     block = payload["clanks"]["example-clank"]
     assert block["snapshot_provenance"]["snapshot_sha256"] == row["snapshot_sha256"]
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "FRESH"
     claim = synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]
     assert claim["state"] == "HEALTHY"
     assert claim["provenance"]["adapter_package_sha"] == ADAPTER_SHA
@@ -168,6 +170,176 @@ def test_recent_copy_of_stale_child_is_unknown_not_healthy(tmp_path):
     assert block["observation"] == "CHILD_EXECUTION_STALE"
     assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
     assert "| example-clank | UNKNOWN |" in render_report(payload)
+
+
+def test_replayed_old_fresh_manifest_and_valid_copy_cannot_be_current(
+        tmp_path, monkeypatch):
+    row, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    assert hashlib.sha256(Path(row["snapshot_path"]).read_bytes()).hexdigest() == \
+        row["snapshot_sha256"]
+    replay_at = datetime.now(UTC) + timedelta(hours=2)
+    monkeypatch.setattr(snapshot_manifest, "utc_now", lambda: replay_at)
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert adapter.calls == 0
+    assert row["freshness_state"] == "FRESH"  # producer-time truth retained
+    assert block["observation"] == "SNAPSHOT_STALE"
+    assert block["snapshot_provenance"]["intake_freshness_state"] == "STALE"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "STALE"
+    assert "COPY_AGE_EXCEEDS_HORIZON_AT_INTAKE" in render_report(payload)
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+def test_child_execution_can_age_out_while_copy_is_still_fresh(
+        tmp_path, monkeypatch):
+    row, manifest, inventory, built, adapter, save = _case(tmp_path)
+    row["freshness_horizon"]["max_age_seconds"] = 600
+    save()
+    monkeypatch.setattr(snapshot_manifest, "utc_now",
+                        lambda: datetime.now(UTC) + timedelta(minutes=7))
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert adapter.calls > 0
+    assert block["snapshot_provenance"]["intake_freshness_state"] == "FRESH"
+    assert block["snapshot_provenance"]["intake_child_execution_freshness"] == "STALE"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "STALE"
+    assert block["observation"] == "CHILD_EXECUTION_STALE"
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+def test_far_future_manifest_rejected_at_intake(tmp_path):
+    row, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    doc = json.loads(manifest.read_text(encoding="utf-8"))
+    doc["observed_at"] = _iso(datetime.now(UTC) + timedelta(hours=1))
+    manifest.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SnapshotManifestError, match="future beyond intake"):
+        _build(tmp_path, manifest, inventory, built)
+    assert adapter.calls == 0
+
+
+def test_successful_producer_claim_of_source_writes_rejected(tmp_path):
+    row, manifest, _, _, _, save = _case(tmp_path)
+    row["source_total_changes"] = 1
+    save()
+    with pytest.raises(SnapshotManifestError, match="observer-side source writes"):
+        load_manifest(manifest)
+
+
+def test_registry_schema_mismatch_never_calls_adapter(tmp_path):
+    _, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    built["expected_schema_versions"]["example-clank"] = "schema-v2"
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert adapter.calls == 0
+    assert block["observation"] == "SNAPSHOT_SCHEMA_MISMATCH"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "INCOMPATIBLE"
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+def test_missing_independent_schema_evidence_is_not_effectively_fresh(tmp_path):
+    _, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    built.pop("expected_schema_versions")
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert adapter.calls > 0
+    assert block["observation"] == "SNAPSHOT_SCHEMA_UNVERIFIED"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "UNKNOWN"
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+def test_null_producer_and_adapter_schema_cannot_claim_compatible_freshness(
+        tmp_path):
+    row, manifest, inventory, built, adapter, save = _case(tmp_path)
+    row["schema_version"] = None
+    row["unavailable_reasons"] = {"schema_version": "NO_NATIVE_VERSION_TABLE"}
+    built.pop("expected_schema_versions")
+    save()
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert adapter.calls > 0
+    assert block["observation"] == "SNAPSHOT_SCHEMA_UNVERIFIED"
+    assert block["error_code"] == "PRODUCER_SCHEMA_UNAVAILABLE"
+    assert block["snapshot_provenance"]["intake_freshness_state"] == "FRESH"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "UNKNOWN"
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+def test_adapter_schema_mismatch_downgrades_independent_registry_match(tmp_path):
+    _, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    adapter.schema_revision = lambda: "schema-v2"
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert block["observation"] == "SNAPSHOT_SCHEMA_MISMATCH"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "INCOMPATIBLE"
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("invalid_schema", [
+    {"version": "schema-v1"}, True, "", []])
+def test_invalid_adapter_schema_extension_cannot_be_effectively_fresh(
+        tmp_path, invalid_schema):
+    _, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    adapter.schema_revision = lambda: invalid_schema
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert block["observation"] == "SNAPSHOT_SCHEMA_UNVERIFIED"
+    assert block["error_code"] == "INVALID_ADAPTER_SCHEMA_VALUE"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "UNKNOWN"
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+def test_adapter_contract_failure_cannot_keep_effective_freshness(tmp_path):
+    _, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    def broken_status():
+        raise RuntimeError("adapter schema query unavailable")
+    adapter.status = broken_status
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert block["status"]["observation"] == "FAILED_ADAPTER"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "INCOMPATIBLE"
+    assert "| example-clank | UNKNOWN |" in render_report(payload)
+    assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "UNKNOWN"
+
+
+def test_top_level_adapter_failure_is_not_overwritten_by_schema_unverified(tmp_path):
+    _, manifest, inventory, built, adapter, _ = _case(tmp_path)
+    built.pop("expected_schema_versions")
+    def broken_identity():
+        raise RuntimeError("identity unavailable")
+    adapter.identity = broken_identity
+    payload, _ = _build(tmp_path, manifest, inventory, built)
+    block = payload["clanks"]["example-clank"]
+    assert block["observation"] == "FAILED_ADAPTER"
+    assert block["snapshot_provenance"]["effective_freshness_state"] == "INCOMPATIBLE"
+
+
+def test_stale_child_envelopes_remain_historical_not_current_claims(tmp_path):
+    row, manifest, inventory, built, adapter, save = _case(tmp_path)
+    envelope = evidence.make_envelope(
+        evidence_type="intelligence_assertion", evidence_version=1,
+        subject={"clank_id": "example-clank"},
+        observed_at=_iso(datetime.now(UTC)), substrate="sqlite:claims",
+        payload={"assertion_ref": "claims/1", "status": "confirmed",
+                 "native_confidence": 0.82,
+                 "occurred_at": _iso(datetime.now(UTC) - timedelta(minutes=5))},
+        provenance={"query": "SELECT claim FROM claims"})
+    adapter.evidence_envelopes = lambda: [envelope]
+    row["child_as_of"] = _iso(datetime.now(UTC) - timedelta(hours=2))
+    row["child_execution_freshness"] = "STALE"
+    save()
+    old_payload, _ = _build(tmp_path, manifest, inventory, built)
+    assert len(old_payload["clanks"]["example-clank"]["evidence_envelopes"]) == 1
+    old_synthesis = synthesis.synthesize_fleet(old_payload)
+    assert old_synthesis["evidence_derivation"]["derived_claim_count"] == 0
+    assert old_synthesis["evidence_derivation"]["withheld_noncurrent_envelope_count"] == 1
+    assert "evidence_derived_claims" not in old_synthesis["clanks"]["example-clank"]
+    row["child_as_of"] = adapter.run_at
+    row["child_execution_freshness"] = "FRESH"
+    save()
+    current_payload, _ = _build(tmp_path, manifest, inventory, built)
+    current_synthesis = synthesis.synthesize_fleet(current_payload)
+    assert current_synthesis["evidence_derivation"]["derived_claim_count"] == 1
+    assert current_synthesis["evidence_derivation"]["withheld_noncurrent_envelope_count"] == 0
 
 
 def test_stale_child_cannot_claim_fresh_execution(tmp_path):
@@ -332,6 +504,7 @@ def test_anomaly_cites_lineage_and_unavailable_is_not_recovery():
                   "observer_contract_version": "0.2",
                   "refresh_outcome": "SUCCESS", "freshness_state": "FRESH",
                   "child_execution_freshness": "FRESH", "observed_at": "2026-09-29T10:00:00Z",
+                  "effective_freshness_state": "FRESH",
                   "instance_id": "nas", "lane_id": "production"}
     first = {"harvested_at_utc": "2026-09-29T10:00:00Z", "content_hash": "h1",
              "snapshot_manifest_sha256": "mh1",
@@ -343,12 +516,43 @@ def test_anomaly_cites_lineage_and_unavailable_is_not_recovery():
                   "observation": "SNAPSHOT_UNAVAILABLE",
                   "snapshot_provenance": {**provenance,
                                           "refresh_outcome": "UNAVAILABLE",
-                                          "freshness_state": "UNAVAILABLE"}}}}
+                                          "freshness_state": "UNAVAILABLE",
+                                          "effective_freshness_state": "UNKNOWN"}}}}
     found = anomalies.detect([first, second])
     issue = next(x for x in found if x["type"] == "SOURCE_DEGRADED_AT_FIRST_OBSERVATION")
     assert issue["lifecycle"] != "RECOVERED"
     assert issue["provenance"]["source_snapshot"]["snapshot_sha256"] == "s" * 64
     assert issue["provenance"]["source_snapshot"]["adapter_package_sha"] == ADAPTER_SHA
+
+
+def test_governed_final_snapshot_omitting_clank_cannot_recover_anomaly():
+    first = {"harvested_at_utc": "2026-09-29T10:00:00Z", "content_hash": "h1",
+             "snapshot_contract_version": "1.0",
+             "clanks": {"example-clank": {
+                 "health": {"sources": [{"source_id": "x", "status": "failed"}]},
+                 "snapshot_provenance": {"effective_freshness_state": "FRESH"}}}}
+    final = {"harvested_at_utc": "2026-09-29T11:00:00Z", "content_hash": "h2",
+             "snapshot_contract_version": "1.0", "clanks": {}}
+    issue = next(x for x in anomalies.detect([first, final])
+                 if x["type"] == "SOURCE_DEGRADED_AT_FIRST_OBSERVATION")
+    assert issue["lifecycle"] != "RECOVERED"
+
+
+def test_governed_qc_ingestion_is_blocked_before_adapter_read(
+        tmp_path, monkeypatch, capsys):
+    _, _, _, built, adapter, _ = _case(tmp_path)
+    built["qc_adapters"] = ["example-clank"]
+    monkeypatch.setattr(cli, "build_adapters", lambda *a, **k: built)
+    monkeypatch.setattr(cli.syn, "read_latest_snapshot", lambda _: {
+        "snapshot_contract_version": "1.0", "content_hash": "h"})
+    monkeypatch.setattr(cli.qc, "ingest_clank", lambda *a, **k: pytest.fail(
+        "QC adapter must not read an unverified governed copy"))
+    rc = cli.main(["ingest-qc", "--real-state", str(tmp_path),
+                   "--var-dir", str(tmp_path), "--out", str(tmp_path),
+                   "--dry-run"])
+    assert rc == 6
+    assert adapter.calls == 0
+    assert "QC ingestion blocked" in capsys.readouterr().err
 
 
 def test_producer_manifest_flows_to_consumer_after_bind_mount_mapping(tmp_path):
@@ -410,7 +614,8 @@ def test_producer_manifest_flows_to_consumer_after_bind_mount_mapping(tmp_path):
         built = {"adapters": {"example-clank": adapter}, "versions": {},
                  "qc_adapters": [],
                  "expected_identities": {"example-clank": {
-                     "instance_id": "nas-canonical", "lane_id": "production"}}}
+                     "instance_id": "nas-canonical", "lane_id": "production"}},
+                 "expected_schema_versions": {"example-clank": "schema-v1"}}
         payload, warnings = _build(tmp_path, manifest_path, inventory, built)
         assert not warnings
         assert synthesis.synthesize_fleet(payload)["clanks"]["example-clank"]["state"] == "HEALTHY"

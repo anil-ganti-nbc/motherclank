@@ -195,10 +195,13 @@ def build_snapshot(
     ro_paths: list[Path] = []
     manifest = (manifest_v1.load_manifest(snapshot_manifest_path)
                 if snapshot_manifest_path is not None else None)
+    intake_at: str | None = None
+    intake_states: dict[str, dict[str, Any]] = {}
     if manifest is not None:
         manifest_v1.verify_adapter_identity(
             manifest, expected_adapter_package_sha,
             expected_adapter_artifact_sha256)
+        intake_at, intake_states = manifest_v1.assess_intake(manifest)
     manifest_lanes = ({row["clank_id"]: row for row in manifest["lanes"]}
                       if manifest is not None else {})
     if manifest is not None:
@@ -243,10 +246,16 @@ def build_snapshot(
                     "child_execution_freshness": "UNKNOWN",
                     "error_code": "NO_MANIFEST_RECORD",
                     "observed_at": manifest["observed_at"],
+                    "intake_observed_at": intake_at,
+                    "intake_freshness_state": "UNAVAILABLE",
+                    "intake_child_execution_freshness": "UNKNOWN",
+                    "intake_reasons": ["NO_MANIFEST_RECORD"],
+                    "effective_freshness_state": "UNKNOWN",
                 },
             }
             continue
         provenance = manifest_v1.lineage(row)
+        provenance.update(intake_states[clank_id])
         if row["refresh_outcome"] != "SUCCESS":
             clanks_out[clank_id] = {
                 "observation": ("SNAPSHOT_REFRESH_FAILED"
@@ -256,9 +265,19 @@ def build_snapshot(
                 "snapshot_provenance": provenance,
             }
             continue
+        if provenance["intake_freshness_state"] != "FRESH":
+            clanks_out[clank_id] = {
+                "observation": "SNAPSHOT_STALE",
+                "error_code": (provenance["intake_reasons"][0]
+                               if provenance["intake_reasons"] else "COPY_NOT_FRESH"),
+                "snapshot_provenance": provenance,
+            }
+            continue
         try:
             manifest_v1.verify_copy(row, Path(adapter.db_path))
         except manifest_v1.SnapshotManifestError as exc:
+            provenance["effective_freshness_state"] = "INCOMPATIBLE"
+            provenance["intake_reasons"].append("SNAPSHOT_VERIFICATION_FAILED")
             clanks_out[clank_id] = {
                 "observation": "SNAPSHOT_REJECTED",
                 "error_code": "SNAPSHOT_VERIFICATION_FAILED",
@@ -268,24 +287,65 @@ def build_snapshot(
             warnings.append(f"{clank_id}: snapshot verification failed: {exc}")
             continue
         ro_paths.append(Path(adapter.db_path))
-        if row["freshness_state"] != "FRESH":
+        expected_schema = (adapters_result.get("expected_schema_versions")
+                           or {}).get(clank_id)
+        if (expected_schema is not None
+                and str(row["schema_version"]) != str(expected_schema)):
+            provenance["effective_freshness_state"] = "INCOMPATIBLE"
+            provenance["intake_reasons"].append("REGISTRY_SCHEMA_MISMATCH")
             clanks_out[clank_id] = {
-                "observation": "SNAPSHOT_STALE",
+                "observation": "SNAPSHOT_SCHEMA_MISMATCH",
+                "error_code": "REGISTRY_SCHEMA_MISMATCH",
                 "snapshot_provenance": provenance,
             }
             continue
         block = observe_clank(adapter)
         block["snapshot_provenance"] = provenance
         actual_schema = block.get("schema_revision")
-        if (row["schema_version"] is not None
-                and isinstance(actual_schema, (str, int))
-                and str(actual_schema) != str(row["schema_version"])):
-            block["observation"] = "SNAPSHOT_SCHEMA_MISMATCH"
-            block["error_code"] = "ADAPTER_SCHEMA_MISMATCH"
-        if row["child_execution_freshness"] != "FRESH" and "observation" not in block:
+        if "observation" not in block:
+            if (actual_schema is not None
+                    and (not isinstance(actual_schema, (str, int))
+                         or isinstance(actual_schema, bool)
+                         or not str(actual_schema).strip())):
+                block["observation"] = "SNAPSHOT_SCHEMA_UNVERIFIED"
+                block["error_code"] = "INVALID_ADAPTER_SCHEMA_VALUE"
+            elif (row["schema_version"] is not None
+                    and isinstance(actual_schema, (str, int))
+                    and str(actual_schema) != str(row["schema_version"])):
+                block["observation"] = "SNAPSHOT_SCHEMA_MISMATCH"
+                block["error_code"] = "ADAPTER_SCHEMA_MISMATCH"
+            elif (row["schema_version"] is not None
+                  and actual_schema is None and expected_schema is None):
+                # An adapter without schema_revision() needs a second,
+                # independent registry version; a producer assertion alone
+                # cannot establish compatibility.
+                block["observation"] = "SNAPSHOT_SCHEMA_UNVERIFIED"
+                block["error_code"] = "NO_INDEPENDENT_SCHEMA_EVIDENCE"
+            elif row["schema_version"] is None:
+                block["observation"] = "SNAPSHOT_SCHEMA_UNVERIFIED"
+                block["error_code"] = "PRODUCER_SCHEMA_UNAVAILABLE"
+        if (provenance["intake_child_execution_freshness"] != "FRESH"
+                and "observation" not in block):
             block["observation"] = ("CHILD_EXECUTION_STALE"
-                                    if row["child_execution_freshness"] == "STALE"
+                                    if provenance["intake_child_execution_freshness"] == "STALE"
                                     else "CHILD_EXECUTION_UNKNOWN")
+        nested_failure = any(
+            isinstance(value, dict) and value.get("observation") == "FAILED_ADAPTER"
+            for value in block.values())
+        observation = block.get("observation")
+        if observation in ("SNAPSHOT_SCHEMA_MISMATCH", "FAILED_ADAPTER") or nested_failure:
+            provenance["effective_freshness_state"] = "INCOMPATIBLE"
+            provenance["intake_reasons"].append(
+                block.get("error_code") or "ADAPTER_CONTRACT_FAILED")
+        elif observation == "SNAPSHOT_SCHEMA_UNVERIFIED":
+            provenance["effective_freshness_state"] = "UNKNOWN"
+            provenance["intake_reasons"].append(block["error_code"])
+        elif provenance["intake_child_execution_freshness"] == "STALE":
+            provenance["effective_freshness_state"] = "STALE"
+        elif provenance["intake_child_execution_freshness"] != "FRESH":
+            provenance["effective_freshness_state"] = "UNKNOWN"
+        elif observation is None:
+            provenance["effective_freshness_state"] = "FRESH"
         clanks_out[clank_id] = block
 
     # F6: annotate each block with the continuity context in force at harvest
@@ -319,6 +379,9 @@ def build_snapshot(
         payload["observer_contract_version"] = manifest_v1.OBSERVER_CONTRACT_VERSION
         payload["snapshot_manifest_sha256"] = manifest["_verified_manifest_sha256"]
         payload["snapshot_manifest_observed_at"] = manifest["observed_at"]
+        payload["snapshot_intake_observed_at"] = intake_at
+        payload["snapshot_intake_clock_skew_bound_seconds"] = (
+            manifest_v1.MAX_INTAKE_CLOCK_SKEW_SECONDS)
     if continuity_events:
         from . import continuity as cont
         payload["continuity_registry_hash"] = cont.registry_hash(continuity_events)
