@@ -20,6 +20,7 @@ A registry file may EXTEND the builtin set (merge) when it contains
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -155,14 +156,22 @@ def ensure_adapter_plane(diagnostic_clank_path: Path | None = None) -> None:
     )
 
 
-def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str, Any]]:
+def load_registry(registry_path: Path | str | None = None, *,
+                  _metadata: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     """Load the effective adapter registry. Malformed overrides fail loudly:
     silent partial onboarding would violate the honesty contract."""
     registry = {cid: dict(entry) for cid, entry in BUILTIN_REGISTRY.items()}
     path = registry_path or os.environ.get("MOTHERCLANK_ADAPTER_REGISTRY")
     if not path:
+        if _metadata is not None:
+            _metadata["source_sha256"] = None
+            _metadata["path"] = None
+            _metadata["effective_sha256"] = "sha256:" + hashlib.sha256(
+                json.dumps(registry, sort_keys=True, separators=(",", ":"))
+                .encode()).hexdigest()
         return registry
-    text = Path(path).read_text(encoding="utf-8")
+    raw = Path(path).read_bytes()
+    text = raw.decode("utf-8")
     try:
         doc = json.loads(text)
     except json.JSONDecodeError:
@@ -217,6 +226,12 @@ def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str
                 f"duplicate store identity: {db_key} claimed by both "
                 f"{seen_stores[db_key]!r} and {cid!r}")
         seen_stores[db_key] = cid
+    if _metadata is not None:
+        _metadata["source_sha256"] = "sha256:" + hashlib.sha256(raw).hexdigest()
+        _metadata["path"] = Path(path)
+        _metadata["effective_sha256"] = "sha256:" + hashlib.sha256(
+            json.dumps(registry, sort_keys=True, separators=(",", ":"))
+            .encode()).hexdigest()
     return registry
 
 
@@ -225,7 +240,8 @@ def build_adapters(real_state_dir: Path,
                    registry_path: Path | str | None = None) -> dict[str, object]:
     """Instantiate every registered observer adapter against read-only DB copies."""
     ensure_adapter_plane(diagnostic_clank_path)
-    registry = load_registry(registry_path)
+    registry_metadata: dict[str, Any] = {}
+    registry = load_registry(registry_path, _metadata=registry_metadata)
     if not registry:
         raise AdapterPlaneUnavailable("effective adapter registry is empty")
     d = real_state_dir
@@ -255,4 +271,8 @@ def build_adapters(real_state_dir: Path,
     return {"adapters": adapters, "versions": versions,
             "qc_adapters": qc_ids,
             "expected_identities": expected_identities,
-            "expected_schema_versions": expected_schema_versions}
+            "expected_schema_versions": expected_schema_versions,
+            "registry_source_sha256": registry_metadata["source_sha256"],
+            "registry_effective_sha256": registry_metadata["effective_sha256"],
+            "registry_path": registry_metadata["path"],
+            "registry_entries": registry}

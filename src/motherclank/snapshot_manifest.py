@@ -309,23 +309,42 @@ def verify_copy(record: dict[str, Any], adapter_path: Path) -> None:
     """Verify actual immutable copy identity and SQLite checks, never source."""
     label = record["clank_id"]
     declared = Path(record["snapshot_path"])
+    def reject_sidecars() -> None:
+        # A hash of the main database does not cover committed WAL pages.
+        # A mode=ro adapter would otherwise read un-hashed rows from -wal.
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(str(declared) + suffix)
+            _require(not (sidecar.exists() or sidecar.is_symlink()),
+                     f"{label}: copy SQLite sidecar {suffix} present")
+
     _require(declared == adapter_path,
              f"{label}: manifest copy path does not match adapter DB path")
     _require(not declared.is_symlink() and declared.is_file(),
              f"{label}: copy missing or symlinked")
+    reject_sidecars()
     _require(declared.stat().st_size == record["snapshot_bytes"],
              f"{label}: copy byte count mismatch")
     digest = hashlib.sha256()
     with declared.open("rb") as stream:
+        header = stream.read(20)
+        digest.update(header)
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
+    # SQLite's immutable=1 connection can report DELETE even for a WAL-mode
+    # main-file header with no sidecar. The persistent header bytes are the
+    # independent check that future mode=ro adapters cannot see WAL pages.
+    _require(len(header) == 20 and header[:16] == b"SQLite format 3\0"
+             and header[18:20] == b"\x01\x01",
+             f"{label}: immutable copy header journal_mode is not delete")
     _require(digest.hexdigest() == _sha256(record["snapshot_sha256"],
                                           f"{label}.snapshot_sha256"),
              f"{label}: copy SHA-256 mismatch")
     try:
-        db = sqlite3.connect(f"file:{declared.as_posix()}?mode=ro", uri=True)
+        db = sqlite3.connect(
+            f"file:{declared.as_posix()}?mode=ro&immutable=1", uri=True)
         try:
             db.execute("PRAGMA query_only=ON")
+            journal_mode = db.execute("PRAGMA journal_mode").fetchone()[0]
             integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
             fk_count = len(db.execute("PRAGMA foreign_key_check").fetchall())
             _require(db.total_changes == 0,
@@ -336,6 +355,9 @@ def verify_copy(record: dict[str, Any], adapter_path: Path) -> None:
         raise SnapshotManifestError(f"{label}: SQLite copy unreadable") from exc
     _require(integrity == "ok" and fk_count == 0,
              f"{label}: SQLite copy integrity/FK mismatch")
+    _require(journal_mode == "delete",
+             f"{label}: immutable copy journal_mode is not delete")
+    reject_sidecars()
 
 
 def lineage(record: dict[str, Any]) -> dict[str, Any]:

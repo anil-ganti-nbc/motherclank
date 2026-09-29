@@ -37,7 +37,22 @@ FLEET_MAPPING = {
 UNMAPPED = "UNMAPPED"
 
 
+_SEMANTIC_RECORD_FIELDS = (
+    "clank_id", "source_table", "original_record_id", "raw_disposition",
+    "fleet_disposition", "subject", "observed_at", "updated_at",
+    "is_corrected_upstream", "evidence", "corpus_id",
+)
+
+
+def _semantic_record(record: dict[str, Any]) -> dict[str, Any]:
+    """The upstream QC decision, excluding observation/transport lineage."""
+    return {key: record.get(key) for key in _SEMANTIC_RECORD_FIELDS}
+
+
 def _content_hash(record: dict[str, Any]) -> str:
+    # Attest the *entire* record, including the governed ingestion lineage.
+    # build_corpus separately decides whether a changed full-record hash
+    # represents an upstream QC correction or only a new observation.
     canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -54,9 +69,12 @@ def normalize_disposition(raw: Any) -> str:
 
 
 def ingest_clank(clank_id: str, adapter: Any, *,
-                 ingestion_snapshot_hash: str) -> dict[str, Any]:
+                 ingestion_snapshot_hash: str,
+                 source_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     """Collect one Clank's QC rows. Adapter failure stays isolated."""
     block: dict[str, Any] = {"clank_id": clank_id, "records": []}
+    if source_snapshot is not None:
+        block["source_snapshot"] = dict(source_snapshot)
     try:
         rows = adapter.qc_records()
     except Exception as exc:
@@ -94,6 +112,8 @@ def ingest_clank(clank_id: str, adapter: Any, *,
                 "actor_label") and v is not None},
             "ingestion_snapshot_hash": ingestion_snapshot_hash,
         }
+        if source_snapshot is not None:
+            record["source_snapshot"] = dict(source_snapshot)
         record["corpus_id"] = _corpus_id(
             clank_id, record["source_table"], record["original_record_id"])
         record["content_hash"] = _content_hash(record)
@@ -119,7 +139,11 @@ def build_corpus(previous_batch: dict[str, Any] | None,
     def _merge_current(cid: str, recs: list[dict[str, Any]]) -> None:
         for rec in recs:
             old = prev_index.get(rec["corpus_id"])
-            if old and old["content_hash"] != rec["content_hash"]:
+            same_decision = bool(old) and (
+                old["content_hash"] == rec["content_hash"]
+                or (("source_snapshot" in old or "source_snapshot" in rec)
+                    and _semantic_record(old) == _semantic_record(rec)))
+            if old and not same_decision:
                 rec.update({
                     "supersedes": old["content_hash"],
                     "supersedes_corpus_id": old["corpus_id"],

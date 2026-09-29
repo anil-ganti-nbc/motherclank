@@ -329,11 +329,20 @@ def build_snapshot(
             block["observation"] = ("CHILD_EXECUTION_STALE"
                                     if provenance["intake_child_execution_freshness"] == "STALE"
                                     else "CHILD_EXECUTION_UNKNOWN")
+        try:
+            # Recheck after adapter reads: the main DB hash alone does not
+            # cover a WAL sidecar appearing during observation.
+            manifest_v1.verify_copy(row, Path(adapter.db_path))
+        except manifest_v1.SnapshotManifestError as exc:
+            block["observation"] = "SNAPSHOT_REJECTED"
+            block["error_code"] = "SNAPSHOT_VERIFICATION_FAILED"
+            block["error"] = str(exc)
         nested_failure = any(
             isinstance(value, dict) and value.get("observation") == "FAILED_ADAPTER"
             for value in block.values())
         observation = block.get("observation")
-        if observation in ("SNAPSHOT_SCHEMA_MISMATCH", "FAILED_ADAPTER") or nested_failure:
+        if observation in ("SNAPSHOT_SCHEMA_MISMATCH", "SNAPSHOT_REJECTED",
+                           "FAILED_ADAPTER") or nested_failure:
             provenance["effective_freshness_state"] = "INCOMPATIBLE"
             provenance["intake_reasons"].append(
                 block.get("error_code") or "ADAPTER_CONTRACT_FAILED")
@@ -357,7 +366,13 @@ def build_snapshot(
             block["continuity"] = cont.continuity_context(continuity_events, cid,
                                                           harvested_at)
 
-    inv_text = inventory_path.read_text()
+    if manifest is not None:
+        # A Git revision alone does not bind uncommitted inventory bytes.
+        # Snapshot-v1 QC must be able to attest the exact inventory M0 read.
+        inv_bytes = inventory_path.read_bytes()
+        inv_text = inv_bytes.decode("utf-8")
+    else:
+        inv_text = inventory_path.read_text()
     inv_rev = _inventory_revision(inventory_path, inv_text)
     payload: dict[str, Any] = {}
     payload_extra: dict[str, Any] = {}
@@ -375,6 +390,19 @@ def build_snapshot(
         "clanks": clanks_out,
     })
     if manifest is not None:
+        registry_source_sha = adapters_result.get("registry_source_sha256")
+        registry_effective_sha = adapters_result.get("registry_effective_sha256")
+        registry_entries = adapters_result.get("registry_entries")
+        if (not isinstance(registry_source_sha, str)
+                or not isinstance(registry_effective_sha, str)
+                or not isinstance(registry_entries, dict)):
+            raise manifest_v1.SnapshotManifestError(
+                "snapshot-v1 adapter registry bytes and effective entries required")
+        payload["inventory_sha256"] = "sha256:" + hashlib.sha256(
+            inv_bytes).hexdigest()
+        payload["adapter_registry_source_sha256"] = registry_source_sha
+        payload["adapter_registry_effective_sha256"] = registry_effective_sha
+        payload["adapter_registry_entries"] = registry_entries
         payload["snapshot_contract_version"] = manifest_v1.SNAPSHOT_CONTRACT_VERSION
         payload["observer_contract_version"] = manifest_v1.OBSERVER_CONTRACT_VERSION
         payload["snapshot_manifest_sha256"] = manifest["_verified_manifest_sha256"]

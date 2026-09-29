@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 from .adapters import AdapterPlaneUnavailable, build_adapters
 from . import snapshot as snap
+from . import snapshot_manifest as manifest_v1
 from .snapshot_manifest import SnapshotManifestError
 from . import synthesis as syn
 from . import continuity as cont
@@ -85,9 +87,14 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--out", type=Path, default=Path("var"))
     q.add_argument("--adapters-src", type=Path, default=None)
     q.add_argument("--adapter-registry", type=Path, default=None)
+    q.add_argument("--inventory", type=Path, default=None,
+                   help="same fleet inventory used by governed M0 harvest")
     q.add_argument("--snapshot-manifest", type=Path, default=None,
-                   help="declare governed snapshot-v1 input; QC ingestion is "
-                        "blocked for QC-enabled lanes until separately gated")
+                   help="ADR-0016 v1.0 manifest used by latest governed M0 harvest")
+    q.add_argument("--expected-adapter-package-sha", type=str, default=None,
+                   help="launcher-verified adapter source SHA for governed QC")
+    q.add_argument("--expected-adapter-artifact-sha256", type=str, default=None,
+                   help="launcher-verified adapter artifact digest for governed QC")
     q.add_argument("--dry-run", action="store_true")
     sr = sub.add_parser("soak-report", help="periodic QC-soak report + M5 gate scoring (Axis B)")
     sr.add_argument("--var-dir", required=True, type=Path)
@@ -180,6 +187,147 @@ def _load_scheduler_traces(var_dir: Path):
     return traces
 
 
+def _governed_qc_gate(args, built: dict, latest: dict | None) -> dict[str, dict]:
+    """Attest each QC input against the latest M0 and the copy *now*.
+
+    No QC adapter's qc_records() is called until this gate succeeds. The
+    latest M0 proves which governed attempt the corpus cites; a new read-only
+    harvest of that same manifest verifies copy, clock, schema, runtime and
+    observer contract again at QC time.
+    """
+    if not isinstance(latest, dict) or latest.get("snapshot_contract_version") != "1.0":
+        raise SnapshotManifestError("governed QC needs a latest snapshot-v1 M0 harvest")
+    if args.snapshot_manifest is None or args.inventory is None:
+        raise SnapshotManifestError(
+            "governed QC requires --snapshot-manifest and --inventory")
+    if not args.inventory.is_file():
+        raise SnapshotManifestError("governed QC inventory missing")
+    saved_hash = latest.get("content_hash")
+    if not isinstance(saved_hash, str) or saved_hash != snap.content_hash({
+            key: value for key, value in latest.items() if key != "content_hash"}):
+        raise SnapshotManifestError("latest M0 snapshot content hash invalid")
+
+    current, _ = snap.build_snapshot(
+        inventory_path=args.inventory,
+        adapters_result=built,
+        real_state_dir=args.real_state,
+        out_dir=args.var_dir,
+        snapshot_manifest_path=args.snapshot_manifest,
+        expected_adapter_package_sha=args.expected_adapter_package_sha,
+        expected_adapter_artifact_sha256=args.expected_adapter_artifact_sha256,
+    )
+    if current.get("snapshot_manifest_sha256") != latest.get(
+            "snapshot_manifest_sha256"):
+        raise SnapshotManifestError("governed QC manifest differs from latest M0")
+    if current.get("inventory_revision") != latest.get("inventory_revision"):
+        raise SnapshotManifestError("governed QC inventory differs from latest M0")
+    if current.get("adapter_contract_versions") != latest.get(
+            "adapter_contract_versions"):
+        raise SnapshotManifestError("governed QC adapter contracts differ from latest M0")
+    latest_registry = latest.get("adapter_registry_entries")
+    if not isinstance(latest_registry, dict):
+        raise SnapshotManifestError("governed QC latest M0 registry missing")
+    intended_qc = {
+        cid for cid, entry in latest_registry.items()
+        if isinstance(entry, dict) and entry.get("qc") is True}
+    if intended_qc != set(built["qc_adapters"]):
+        raise SnapshotManifestError("governed QC enabled lane set differs from latest M0")
+    for field in ("adapter_registry_source_sha256",
+                  "adapter_registry_effective_sha256",
+                  "adapter_registry_entries"):
+        if current.get(field) != latest.get(field):
+            raise SnapshotManifestError(
+                f"governed QC {field} differs from latest M0")
+    if (not isinstance(latest.get("inventory_sha256"), str)
+            or current.get("inventory_sha256") != latest["inventory_sha256"]):
+        raise SnapshotManifestError("governed QC inventory bytes differ from latest M0")
+    manifest = manifest_v1.load_manifest(args.snapshot_manifest)
+    if manifest["_verified_manifest_sha256"] != current["snapshot_manifest_sha256"]:
+        raise SnapshotManifestError("governed QC manifest changed during gate")
+    producer_lanes = {row["clank_id"]: row for row in manifest["lanes"]}
+
+    source_provenance: dict[str, dict] = {}
+    for cid in built["qc_adapters"]:
+        old_block = (latest.get("clanks") or {}).get(cid)
+        new_block = (current.get("clanks") or {}).get(cid)
+        if not isinstance(old_block, dict) or not isinstance(new_block, dict):
+            raise SnapshotManifestError(f"{cid}: QC lane absent from governed M0")
+        old = old_block.get("snapshot_provenance")
+        new = new_block.get("snapshot_provenance")
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            raise SnapshotManifestError(f"{cid}: QC snapshot provenance missing")
+        if (old.get("effective_freshness_state") != "FRESH"
+                or new.get("effective_freshness_state") != "FRESH"
+                or old_block.get("observation") or new_block.get("observation")):
+            raise SnapshotManifestError(f"{cid}: QC snapshot not effectively FRESH")
+        producer_row = producer_lanes.get(cid)
+        if producer_row is None:
+            raise SnapshotManifestError(f"{cid}: QC lane absent from manifest")
+        expected_lineage = manifest_v1.lineage(producer_row)
+        if (any(old.get(key) != value or new.get(key) != value
+                for key, value in expected_lineage.items())):
+            raise SnapshotManifestError(
+                f"{cid}: QC producer lineage differs from governed M0")
+        source_provenance[cid] = {
+            "ingestion_snapshot_hash": saved_hash,
+            "snapshot_manifest_sha256": current["snapshot_manifest_sha256"],
+            "inventory_sha256": current["inventory_sha256"],
+            "adapter_registry_source_sha256": current[
+                "adapter_registry_source_sha256"],
+            "adapter_registry_effective_sha256": current[
+                "adapter_registry_effective_sha256"],
+            **expected_lineage,
+            "effective_freshness_state": "FRESH",
+        }
+    return source_provenance
+
+
+def _governed_qc_postread(args, built: dict, manifest_hash: str,
+                          latest_m0_hash: str, inventory_hash: str,
+                          registry_hash: str) -> None:
+    """Close the copy/manifest/read race before writing any QC output."""
+    doc = manifest_v1.load_manifest(args.snapshot_manifest)
+    if doc["_verified_manifest_sha256"] != manifest_hash:
+        raise SnapshotManifestError("QC manifest changed during adapter read")
+    try:
+        actual_inventory_hash = "sha256:" + hashlib.sha256(
+            args.inventory.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise SnapshotManifestError("QC inventory unreadable during adapter read") from exc
+    if actual_inventory_hash != inventory_hash:
+        raise SnapshotManifestError("QC inventory changed during adapter read")
+    registry_path = built.get("registry_path")
+    if not isinstance(registry_path, Path):
+        raise SnapshotManifestError("QC adapter registry path missing")
+    try:
+        actual_registry_hash = "sha256:" + hashlib.sha256(
+            registry_path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise SnapshotManifestError("QC adapter registry unreadable during read") from exc
+    if actual_registry_hash != registry_hash:
+        raise SnapshotManifestError("QC adapter registry changed during read")
+    manifest_v1.verify_adapter_identity(
+        doc, args.expected_adapter_package_sha,
+        args.expected_adapter_artifact_sha256)
+    _, intake = manifest_v1.assess_intake(doc)
+    lanes = {row["clank_id"]: row for row in doc["lanes"]}
+    for cid in built["qc_adapters"]:
+        row = lanes.get(cid)
+        state = intake.get(cid)
+        if (row is None or state is None
+                or state["intake_freshness_state"] != "FRESH"
+                or state["intake_child_execution_freshness"] != "FRESH"):
+            raise SnapshotManifestError(f"{cid}: QC copy or child aged out during read")
+        manifest_v1.verify_copy(row, Path(built["adapters"][cid].db_path))
+    latest = syn.read_latest_snapshot(args.var_dir)
+    if (not isinstance(latest, dict)
+            or latest.get("content_hash") != latest_m0_hash
+            or snap.content_hash({
+                key: value for key, value in latest.items()
+                if key != "content_hash"}) != latest_m0_hash):
+        raise SnapshotManifestError("latest M0 harvest changed during QC read")
+
+
 def _ingest_qc(args) -> int:
     try:
         built = build_adapters(args.real_state,
@@ -190,13 +338,15 @@ def _ingest_qc(args) -> int:
         return 4
     # ingestion snapshot hash: reuse latest harvest snapshot if present
     latest = syn.read_latest_snapshot(args.var_dir) if hasattr(syn, "read_latest_snapshot") else None
-    if (built["qc_adapters"] and
-            (args.snapshot_manifest is not None or
-             (latest or {}).get("snapshot_contract_version") == "1.0")):
-        print("QC ingestion blocked: governed snapshot-v1 QC lanes need "
-              "independently attested intake freshness before records can "
-              "be appended", file=sys.stderr)
-        return 6
+    governed = (args.snapshot_manifest is not None
+                or (latest or {}).get("snapshot_contract_version") == "1.0")
+    source_provenance: dict[str, dict] = {}
+    if governed:
+        try:
+            source_provenance = _governed_qc_gate(args, built, latest)
+        except SnapshotManifestError as exc:
+            print(f"governed QC rejected: {exc}", file=sys.stderr)
+            return 6
     snap_hash = (latest or {}).get("content_hash", "no-snapshot")
     generated_from = (latest or {}).get("harvested_at_utc") \
         or datetime.now(UTC).isoformat(timespec="seconds")
@@ -204,11 +354,37 @@ def _ingest_qc(args) -> int:
     blocks = {}
     for cid in built["qc_adapters"]:
         adapter = built["adapters"][cid]
-        blocks[cid] = qc.ingest_clank(cid, adapter,
-                                      ingestion_snapshot_hash=snap_hash)
+        kwargs = {"ingestion_snapshot_hash": snap_hash}
+        if governed:
+            kwargs["source_snapshot"] = source_provenance[cid]
+        blocks[cid] = qc.ingest_clank(cid, adapter, **kwargs)
+        if governed and blocks[cid].get("observation") == "FAILED_ADAPTER":
+            print(f"governed QC rejected: {cid} QC adapter failed",
+                  file=sys.stderr)
+            return 6
+    if governed:
+        try:
+            _governed_qc_postread(
+                args, built, latest["snapshot_manifest_sha256"], snap_hash,
+                latest["inventory_sha256"],
+                latest["adapter_registry_source_sha256"])
+        except SnapshotManifestError as exc:
+            print(f"governed QC rejected: {exc}", file=sys.stderr)
+            return 6
     payload, warnings = qc.build_corpus(previous, blocks,
                                         generated_from=generated_from,
                                         snapshot_hash=snap_hash)
+    if governed:
+        # The merge may take time; do not append a batch citing inputs that
+        # changed after the QC adapter returned.
+        try:
+            _governed_qc_postread(
+                args, built, latest["snapshot_manifest_sha256"], snap_hash,
+                latest["inventory_sha256"],
+                latest["adapter_registry_source_sha256"])
+        except SnapshotManifestError as exc:
+            print(f"governed QC rejected: {exc}", file=sys.stderr)
+            return 6
     if args.dry_run:
         print(qc.render_coverage(payload))
     else:
