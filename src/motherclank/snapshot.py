@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import SNAPSHOT_SCHEMA_VERSION
+from . import snapshot_manifest as manifest_v1
 
 _UNKNOWN = "UNKNOWN"
 
@@ -96,9 +97,9 @@ def observe_clank(adapter: Any) -> dict[str, Any]:
             block[extra] = {"observation": "FAILED_ADAPTER", "error": f"{type(exc).__name__}: {exc}"}
             continue
         block[extra] = value
-        # P-4.1 hardening: capability statements are validated against the
-        # canonical vocabulary (clank_runtime.contracts.capabilities).
-        # Non-conforming values surface as warnings - never coerced.
+        # Capability vocabulary is part of the required v0.2 surface. A
+        # malformed statement cannot be allowed to accompany a HEALTHY
+        # claim; preserve the violation and isolate this evidence surface.
         if extra == "capability_states":
             try:
                 from clank_runtime.contracts.capabilities import \
@@ -106,6 +107,11 @@ def observe_clank(adapter: Any) -> dict[str, Any]:
                 violations = validate_capability_states(value)
                 if violations:
                     block["capability_states_violations"] = violations
+                    block[extra] = {
+                        "observation": "FAILED_ADAPTER",
+                        "error": "invalid capability state vocabulary",
+                        "contract_violations": violations,
+                    }
             except ImportError:
                 pass  # contract module unavailable in this plane; skip check
     return block
@@ -174,16 +180,113 @@ def build_snapshot(
     real_state_dir: Path,
     out_dir: Path,
     continuity_events: list[dict[str, Any]] | None = None,
+    snapshot_manifest_path: Path | None = None,
+    expected_adapter_package_sha: str | None = None,
+    expected_adapter_artifact_sha256: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Return (snapshot_payload_without_content_hash, warnings)."""
+    """Return (snapshot_payload, warnings).
+
+    Supplying a v1 manifest opts into fail-closed NAS snapshot intake. The
+    legacy path remains available for historical replay but is not a claim
+    of ADR-0016 snapshot conformance.
+    """
     warnings: list[str] = []
     clanks_out: dict[str, Any] = {}
     ro_paths: list[Path] = []
+    manifest = (manifest_v1.load_manifest(snapshot_manifest_path)
+                if snapshot_manifest_path is not None else None)
+    if manifest is not None:
+        manifest_v1.verify_adapter_identity(
+            manifest, expected_adapter_package_sha,
+            expected_adapter_artifact_sha256)
+    manifest_lanes = ({row["clank_id"]: row for row in manifest["lanes"]}
+                      if manifest is not None else {})
+    if manifest is not None:
+        unknown = sorted(set(manifest_lanes) - set(adapters_result["adapters"]))
+        if unknown:
+            raise manifest_v1.SnapshotManifestError(
+                f"manifest clank IDs absent from adapter registry: {unknown}")
+        # The producer's clank_id is not enough to identify a canonical
+        # child. Bind every attempted record to an independently configured
+        # registry instance/lane before invoking any adapter. A historical
+        # registry without this binding remains valid only for legacy intake.
+        expected = adapters_result.get("expected_identities") or {}
+        for row in manifest["lanes"]:
+            clank_id = row["clank_id"]
+            identity = expected.get(clank_id)
+            if not isinstance(identity, dict):
+                raise manifest_v1.SnapshotManifestError(
+                    f"{clank_id}: adapter registry has no expected "
+                    "instance_id/lane_id for snapshot-v1 intake")
+            for field in ("instance_id", "lane_id"):
+                if row[field] != identity.get(field):
+                    raise manifest_v1.SnapshotManifestError(
+                        f"{clank_id}: manifest {field} {row[field]!r} does not "
+                        f"match registry identity {identity.get(field)!r}")
 
     for clank_id in sorted(adapters_result["adapters"]):
         adapter = adapters_result["adapters"][clank_id]
+        if manifest is None:
+            ro_paths.append(Path(adapter.db_path))
+            clanks_out[clank_id] = observe_clank(adapter)
+            continue
+        row = manifest_lanes.get(clank_id)
+        if row is None:
+            clanks_out[clank_id] = {
+                "observation": "SNAPSHOT_UNAVAILABLE",
+                "error_code": "NO_MANIFEST_RECORD",
+                "snapshot_provenance": {
+                    "snapshot_contract_version": manifest_v1.SNAPSHOT_CONTRACT_VERSION,
+                    "clank_id": clank_id,
+                    "refresh_outcome": "UNAVAILABLE",
+                    "freshness_state": "UNAVAILABLE",
+                    "child_execution_freshness": "UNKNOWN",
+                    "error_code": "NO_MANIFEST_RECORD",
+                    "observed_at": manifest["observed_at"],
+                },
+            }
+            continue
+        provenance = manifest_v1.lineage(row)
+        if row["refresh_outcome"] != "SUCCESS":
+            clanks_out[clank_id] = {
+                "observation": ("SNAPSHOT_REFRESH_FAILED"
+                                if row["refresh_outcome"] == "FAILED"
+                                else "SNAPSHOT_UNAVAILABLE"),
+                "error_code": row["error_code"],
+                "snapshot_provenance": provenance,
+            }
+            continue
+        try:
+            manifest_v1.verify_copy(row, Path(adapter.db_path))
+        except manifest_v1.SnapshotManifestError as exc:
+            clanks_out[clank_id] = {
+                "observation": "SNAPSHOT_REJECTED",
+                "error_code": "SNAPSHOT_VERIFICATION_FAILED",
+                "error": str(exc),
+                "snapshot_provenance": provenance,
+            }
+            warnings.append(f"{clank_id}: snapshot verification failed: {exc}")
+            continue
         ro_paths.append(Path(adapter.db_path))
-        clanks_out[clank_id] = observe_clank(adapter)
+        if row["freshness_state"] != "FRESH":
+            clanks_out[clank_id] = {
+                "observation": "SNAPSHOT_STALE",
+                "snapshot_provenance": provenance,
+            }
+            continue
+        block = observe_clank(adapter)
+        block["snapshot_provenance"] = provenance
+        actual_schema = block.get("schema_revision")
+        if (row["schema_version"] is not None
+                and isinstance(actual_schema, (str, int))
+                and str(actual_schema) != str(row["schema_version"])):
+            block["observation"] = "SNAPSHOT_SCHEMA_MISMATCH"
+            block["error_code"] = "ADAPTER_SCHEMA_MISMATCH"
+        if row["child_execution_freshness"] != "FRESH" and "observation" not in block:
+            block["observation"] = ("CHILD_EXECUTION_STALE"
+                                    if row["child_execution_freshness"] == "STALE"
+                                    else "CHILD_EXECUTION_UNKNOWN")
+        clanks_out[clank_id] = block
 
     # F6: annotate each block with the continuity context in force at harvest
     # time (derive-time only; the registry itself stays append-only evidence).
@@ -211,6 +314,11 @@ def build_snapshot(
         "read_only_proof_total_changes": db_readonly_proof(ro_paths),
         "clanks": clanks_out,
     })
+    if manifest is not None:
+        payload["snapshot_contract_version"] = manifest_v1.SNAPSHOT_CONTRACT_VERSION
+        payload["observer_contract_version"] = manifest_v1.OBSERVER_CONTRACT_VERSION
+        payload["snapshot_manifest_sha256"] = manifest["_verified_manifest_sha256"]
+        payload["snapshot_manifest_observed_at"] = manifest["observed_at"]
     if continuity_events:
         from . import continuity as cont
         payload["continuity_registry_hash"] = cont.registry_hash(continuity_events)

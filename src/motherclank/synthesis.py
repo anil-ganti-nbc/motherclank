@@ -68,23 +68,56 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
                      liveness: dict[str, Any] | None = None) -> dict[str, Any]:
     evidence: list[str] = []
     state = "UNKNOWN"
+    snapshot_provenance = block.get("snapshot_provenance")
 
     def claim(final: str, rules: list[str]) -> dict[str, Any]:
-        return {
+        provenance = {
+            "derived_by": "motherclank-m1",
+            "source_clank": clank_id,
+            "snapshot_observed_at": observed_at,
+        }
+        if isinstance(snapshot_provenance, dict):
+            provenance.update({key: snapshot_provenance.get(key) for key in (
+                "snapshot_contract_version", "instance_id", "lane_id",
+                "snapshot_sha256", "adapter_package_sha",
+                "adapter_artifact_sha256", "adapter_package_version",
+                "observer_contract_version", "refresh_outcome",
+                "freshness_state", "child_execution_freshness",
+                "observed_at",
+            )})
+        result = {
             "clank_id": clank_id,
             "state": final,
             "rules_applied": rules,
             "evidence_fields": evidence,
             "observed_at": observed_at,
-            "provenance": {
-                "derived_by": "motherclank-m1",
-                "source_clank": clank_id,
-                "snapshot_observed_at": observed_at,
-            },
+            "provenance": provenance,
         }
+        if isinstance(snapshot_provenance, dict):
+            result["snapshot_refresh"] = {
+                key: snapshot_provenance.get(key) for key in (
+                    "refresh_outcome", "freshness_state",
+                    "child_execution_freshness", "error_code")
+            }
+        return result
 
     def note(path: str) -> None:
         evidence.append(path)
+
+    # ADR-0016: copy freshness and native child execution are separate
+    # dimensions. Neither a retained old copy nor a recent copy of stale
+    # child state may be promoted to healthy adapter evidence.
+    observation = block.get("observation")
+    if isinstance(observation, str) and observation.startswith((
+            "SNAPSHOT_", "CHILD_EXECUTION_")):
+        note(f"clanks.{clank_id}.observation={observation}")
+        return claim("UNKNOWN", ["R0_SNAPSHOT"])
+    if isinstance(snapshot_provenance, dict) and (
+            snapshot_provenance.get("refresh_outcome") != "SUCCESS"
+            or snapshot_provenance.get("freshness_state") != "FRESH"
+            or snapshot_provenance.get("child_execution_freshness") != "FRESH"):
+        note(f"clanks.{clank_id}.snapshot_provenance=NOT_CURRENT")
+        return claim("UNKNOWN", ["R0_SNAPSHOT"])
 
     # R0 — adapter failures poison everything we could claim
     for key, val in block.items():

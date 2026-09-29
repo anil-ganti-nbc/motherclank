@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .adapters import AdapterPlaneUnavailable, build_adapters
 from . import snapshot as snap
+from .snapshot_manifest import SnapshotManifestError
 from . import synthesis as syn
 from . import continuity as cont
 from . import liveness as live
@@ -47,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="path to diagnostic-clank checkout if not a workspace sibling")
     h.add_argument("--adapter-registry", type=Path, default=None,
                     help="optional adapter registry file (JSON/YAML); extends builtin set")
+    h.add_argument("--snapshot-manifest", type=Path, default=None,
+                   help="ADR-0016 v1.0 per-lane provenance manifest; required for NAS candidate proof")
+    h.add_argument("--expected-adapter-package-sha", type=str, default=None,
+                   help="launcher-verified Diagnostic adapter source Git SHA; required with v1 manifest")
+    h.add_argument("--expected-adapter-artifact-sha256", type=str, default=None,
+                   help="launcher-verified adapter-bearing image/package digest; required with v1 manifest")
     h.add_argument("--out", type=Path, default=Path("var"), help="output directory")
     h.add_argument("--dry-run", action="store_true",
                    help="compute and print; write nothing")
@@ -369,18 +376,28 @@ def _harvest(args) -> int:
         return 3
     try:
         built = build_adapters(args.real_state,
+                               diagnostic_clank_path=args.adapters_src,
                                registry_path=getattr(args, "adapter_registry", None))
     except AdapterPlaneUnavailable as exc:
         print(f"adapter plane unavailable: {exc}", file=sys.stderr)
         return 4
 
-    payload, warnings = snap.build_snapshot(
-        inventory_path=args.inventory,
-        adapters_result=built,
-        real_state_dir=args.real_state,
-        out_dir=args.out,
-        continuity_events=_load_continuity(args.out) or None,
-    )
+    try:
+        payload, warnings = snap.build_snapshot(
+            inventory_path=args.inventory,
+            adapters_result=built,
+            real_state_dir=args.real_state,
+            out_dir=args.out,
+            continuity_events=_load_continuity(args.out) or None,
+            snapshot_manifest_path=getattr(args, "snapshot_manifest", None),
+            expected_adapter_package_sha=getattr(
+                args, "expected_adapter_package_sha", None),
+            expected_adapter_artifact_sha256=getattr(
+                args, "expected_adapter_artifact_sha256", None),
+        )
+    except SnapshotManifestError as exc:
+        print(f"snapshot manifest rejected: {exc}", file=sys.stderr)
+        return 6
 
     if args.dry_run:
         print(render_report(payload))

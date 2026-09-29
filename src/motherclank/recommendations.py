@@ -132,6 +132,9 @@ def _cite(a: dict[str, Any]) -> dict[str, Any]:
         "last_seen": a["last_seen"],
         "latest_evidence": latest.get("detail", ""),
     }
+    source_snapshot = (a.get("provenance") or {}).get("source_snapshot")
+    if isinstance(source_snapshot, dict):
+        citation["source_snapshot"] = source_snapshot
     # F6: carry continuity qualification into citations so recommendations
     # name the explaining incident instead of implying organic behaviour.
     if a.get("continuity_qualified"):

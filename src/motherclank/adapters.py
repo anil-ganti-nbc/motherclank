@@ -181,12 +181,25 @@ def load_registry(registry_path: Path | str | None = None) -> dict[str, dict[str
             if not entry.get(field):
                 raise AdapterPlaneUnavailable(
                     f"registry row {cid!r} missing required field {field!r}")
+        # Snapshot-v1 intake binds a copy to an operator-declared child
+        # instance and lane, not merely to the adapter's clank_id. Legacy
+        # registries may omit both fields; they cannot authorize a v1 copy.
+        identity_fields = ("instance_id", "lane_id")
+        if any(field in entry for field in identity_fields):
+            for field in identity_fields:
+                if not isinstance(entry.get(field), str) or not entry[field].strip():
+                    raise AdapterPlaneUnavailable(
+                        f"registry row {cid!r} needs nonempty {field!r} "
+                        "when snapshot identity is configured")
         registry[str(cid)] = {
             "module": entry["module"],
             "class": entry["class"],
             "db": entry["db"],
             "qc": bool(entry.get("qc", False)),
         }
+        if all(field in entry for field in identity_fields):
+            registry[str(cid)].update({field: entry[field]
+                                       for field in identity_fields})
     # Duplicate store identity (final sweep, builtin included): two lanes
     # pointing at one DB file would silently cross-contaminate evidence.
     seen_stores: dict[str, str] = {}
@@ -210,6 +223,7 @@ def build_adapters(real_state_dir: Path,
         raise AdapterPlaneUnavailable("effective adapter registry is empty")
     d = real_state_dir
     adapters: dict[str, Any] = {}
+    expected_identities: dict[str, dict[str, str]] = {}
     qc_ids: list[str] = []
     versions: dict[str, Any] = {}
     from clank_runtime.version import ADAPTER_CONTRACT_VERSION  # noqa: PLC0415
@@ -219,8 +233,15 @@ def build_adapters(real_state_dir: Path,
         module = __import__(entry["module"], fromlist=[entry["class"]])
         cls = getattr(module, entry["class"])
         adapters[cid] = cls(db_path=d / entry["db"])
+        if "instance_id" in entry and "lane_id" in entry:
+            expected_identities[cid] = {
+                "instance_id": entry["instance_id"],
+                "lane_id": entry["lane_id"],
+            }
         if entry.get("qc"):
             qc_ids.append(cid)
 
     versions = {"adapter_contract_version": ADAPTER_CONTRACT_VERSION}
-    return {"adapters": adapters, "versions": versions, "qc_adapters": qc_ids}
+    return {"adapters": adapters, "versions": versions,
+            "qc_adapters": qc_ids,
+            "expected_identities": expected_identities}

@@ -21,6 +21,10 @@ def _fmt(value: Any) -> str:
 
 
 def _state_of(clank_block: dict[str, Any]) -> str:
+    observation = clank_block.get("observation")
+    if isinstance(observation, str) and observation.startswith((
+            "SNAPSHOT_", "CHILD_EXECUTION_")):
+        return _UNKNOWN
     status = clank_block.get("status")
     if isinstance(status, dict):
         raw = str(status.get("operational_state", _UNKNOWN)).split(".")[-1]
@@ -66,6 +70,18 @@ def render_report(payload: dict[str, Any]) -> str:
         if epoch is None and "current_epoch" in block:
             notes_parts.append("epoch=UNKNOWN")
         lines.append(f"| {cid} | {_state_of(block)} | {src} | {ev} | {qc_s} | {'; '.join(notes_parts) or '-'} |")
+    if payload.get("snapshot_contract_version"):
+        lines.extend(["", "## ADR-0016 snapshot provenance", "",
+                      "| Clank | Refresh / snapshot / child execution | Copy SHA-256 | Adapter source / artifact |",
+                      "|---|---|---|---|"])
+        for cid in sorted(payload.get("clanks", {})):
+            p = payload["clanks"][cid].get("snapshot_provenance") or {}
+            state = "/".join(str(p.get(key) or _UNKNOWN) for key in (
+                "refresh_outcome", "freshness_state",
+                "child_execution_freshness"))
+            adapter = f"{p.get('adapter_package_sha') or _UNKNOWN} / " \
+                      f"{p.get('adapter_artifact_sha256') or _UNKNOWN}"
+            lines.append(f"| {cid} | {state} | {p.get('snapshot_sha256') or _UNKNOWN} | {adapter} |")
     lines.append("")
     lines.append("_All values are as observed by read-only adapters; UNKNOWN means the")
     lines.append("underlying system does not evidence it. Clank databases remain authoritative._")
@@ -103,6 +119,21 @@ def render_synthesis(synth: dict[str, Any]) -> str:
             f"| {cid} | {c['state']} | {', '.join(c['rules_applied']) or '-'} "
             f"| {'; '.join(c['evidence_fields']) or '-'} |"
         )
+    if any("snapshot_refresh" in c for c in synth.get("clanks", {}).values()):
+        lines.extend(["", "## ADR-0016 source provenance", "",
+                      "| Clank | Refresh / snapshot / child execution | Copy SHA-256 | Adapter source / artifact |",
+                      "|---|---|---|---|"])
+        for cid in sorted(synth.get("clanks", {})):
+            c = synth["clanks"][cid]
+            if "snapshot_refresh" not in c:
+                continue
+            p = c.get("provenance") or {}
+            state = "/".join(str(p.get(key) or _UNKNOWN) for key in (
+                "refresh_outcome", "freshness_state",
+                "child_execution_freshness"))
+            adapter = f"{p.get('adapter_package_sha') or _UNKNOWN} / " \
+                      f"{p.get('adapter_artifact_sha256') or _UNKNOWN}"
+            lines.append(f"| {cid} | {state} | {p.get('snapshot_sha256') or _UNKNOWN} | {adapter} |")
     lines += ["", "## Law 9 deployment-drift indicator", ""]
     drift = synth.get("law9_drift") or []
     if not drift:

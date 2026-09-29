@@ -99,8 +99,23 @@ def detect(snapshots: list[dict[str, Any]],
                    key=lambda s: (s.get("harvested_at_utc", ""),
                                   s.get("content_hash", "")))
     ledger: dict[str, dict[str, Any]] = {}
+    current_snapshot: dict[str, Any] | None = None
 
     def upsert(new: dict[str, Any]) -> None:
+        if current_snapshot is not None:
+            if current_snapshot.get("snapshot_manifest_sha256"):
+                new["provenance"]["snapshot_manifest_sha256"] = (
+                    current_snapshot["snapshot_manifest_sha256"])
+            block = (current_snapshot.get("clanks") or {}).get(new["clank_id"], {})
+            lineage = block.get("snapshot_provenance") if isinstance(block, dict) else None
+            if isinstance(lineage, dict):
+                new["provenance"]["source_snapshot"] = {
+                    key: lineage.get(key) for key in (
+                        "snapshot_sha256", "adapter_package_sha",
+                        "adapter_artifact_sha256", "adapter_package_version",
+                        "observer_contract_version", "refresh_outcome",
+                        "freshness_state", "child_execution_freshness",
+                        "observed_at", "instance_id", "lane_id")}
         existing = ledger.get(new["anomaly_id"])
         if existing is None:
             if new["last_seen"] != new["first_seen"]:
@@ -122,11 +137,16 @@ def detect(snapshots: list[dict[str, Any]],
     prev_fleet_state: str | None = None
 
     for snap in snaps:
+        current_snapshot = snap
         at = snap.get("harvested_at_utc", "")
         shash = snap.get("content_hash", "")
 
         # --- source-level transitions and streaks -------------------------
         for cid, block in snap.get("clanks", {}).items():
+            observation = block.get("observation")
+            if isinstance(observation, str) and observation.startswith((
+                    "SNAPSHOT_", "CHILD_EXECUTION_")):
+                continue  # missing/stale copy is not a source transition
             health = block.get("health") or {}
             if isinstance(health, dict) and health.get("observation") == "FAILED_ADAPTER":
                 continue  # partial adapter failure cannot contaminate siblings
@@ -242,6 +262,9 @@ def detect(snapshots: list[dict[str, Any]],
             recovered = False
             if block is None:
                 recovered = True
+            elif isinstance(block.get("observation"), str) and block[
+                    "observation"].startswith(("SNAPSHOT_", "CHILD_EXECUTION_")):
+                continue  # observer blindness cannot prove recovery
             elif a["type"] in ("SOURCE_HEALTH_TRANSITION",
                                "SOURCE_DEGRADED_AT_FIRST_OBSERVATION",
                                "PERSISTENT_BLOCKED_STREAK"):
