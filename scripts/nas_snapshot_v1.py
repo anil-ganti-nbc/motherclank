@@ -49,6 +49,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -223,6 +224,13 @@ def _validate_spec(spec: Any, output_root: Path, container_dir: str) -> List[Dic
             or not SHA256.fullmatch(last_good[7:] if last_good.startswith("sha256:") else last_good)
         ):
             raise SpecError("invalid_last_good_snapshot_ref")
+        history = lane.get("retained_prior_snapshot_refs", [])
+        if not isinstance(history, list) or any(
+            not isinstance(ref, str) or not SHA256.fullmatch(
+                ref[7:] if ref.startswith("sha256:") else ref)
+            for ref in history
+        ):
+            raise SpecError("invalid_retained_prior_snapshot_refs")
         copy = dict(lane)
         copy["_source_path"] = source
         copy["_resolved_source_path"] = resolved
@@ -313,22 +321,69 @@ def _mark_no_artifact(record: Dict[str, Any], reason: str) -> None:
     for key in ("child_as_of", "child_as_of_clock", "schema_version"):
         record["unavailable_reasons"][key] = reason
     if record["last_good_snapshot_ref"] is None:
-        record["unavailable_reasons"]["last_good_snapshot_ref"] = "NO_PRIOR_SNAPSHOT"
+        record["unavailable_reasons"]["last_good_snapshot_ref"] = "NO_CONFIGURED_LAST_GOOD_REFERENCE"
 
 
-def _refresh_lane(lane: Dict[str, Any], run_dir: Path, container_dir: str) -> Dict[str, Any]:
+def _refresh_lane(lane: Dict[str, Any], run_dir: Path, container_dir: str,
+                  diagnostics: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     observed_at = _iso_utc(_utc_now())
     record = _base_record(lane, observed_at)
+    started = time.monotonic()
+    diagnostic = {
+        "clank_id": lane["clank_id"], "instance_id": lane["instance_id"],
+        "lane_id": lane["lane_id"], "observed_at": observed_at,
+        "failure_stage": None, "failure_operation": None,
+        "exception_class": None, "sqlite_error_class": None,
+        "sqlite_error_code": None, "sqlite_error_name": None,
+        "destination_created": False, "backup_completed": False,
+        "integrity_completed": False, "fk_completed": False,
+        "completed_operations": [], "cleanup_errors": [],
+        "configured_last_good_reference": lane.get("last_good_snapshot_ref"),
+        "retained_prior_snapshot_refs": list(lane.get("retained_prior_snapshot_refs", [])),
+        # Spec-supplied evidence only: absence of a reference is not proof
+        # that no old snapshot exists. No sweep or automatic fallback.
+        "retained_prior_snapshot_evidence": (
+            "RETAINED_PRIOR_SNAPSHOT_NOT_ADMITTED_AS_FALLBACK"
+            if lane.get("retained_prior_snapshot_refs") else
+            "NO_RETAINED_PRIOR_SNAPSHOT" if lane.get("retained_prior_snapshot_refs") == [] else
+            "RETAINED_PRIOR_SNAPSHOT_NOT_INSPECTED"
+        ),
+    }
+    if diagnostics is not None:
+        diagnostics.append(diagnostic)
+    stage, operation = "OTHER", "SOURCE_PATH_CHECK"
+
+    def failed(exc: Exception) -> None:
+        diagnostic["failure_stage"] = stage
+        diagnostic["failure_operation"] = operation
+        diagnostic["exception_class"] = type(exc).__name__
+        sql_exc = exc if isinstance(exc, sqlite3.Error) else exc.__cause__
+        if isinstance(sql_exc, sqlite3.Error):
+            diagnostic["sqlite_error_class"] = type(sql_exc).__name__
+            code = getattr(sql_exc, "sqlite_errorcode", None)
+            name = getattr(sql_exc, "sqlite_errorname", None)
+            diagnostic["sqlite_error_code"] = code if type(code) is int else None
+            diagnostic["sqlite_error_name"] = (
+                name if isinstance(name, str) and re.fullmatch(r"SQLITE_[A-Z0-9_]+", name) else None
+            )
+        # Never serialize str(exc), SQL, paths from exceptions, or tracebacks.
+
+    def finish() -> None:
+        diagnostic["elapsed_seconds"] = round(time.monotonic() - started, 6)
+        diagnostic["refresh_outcome"] = record["refresh_outcome"]
+        diagnostic["error_code"] = record["error_code"]
     source_path = lane["_source_path"]
     if source_path.is_symlink() or source_path.resolve() != lane["_resolved_source_path"]:
         record["error_code"] = "SOURCE_PATH_CHANGED"
         record["refresh_outcome"] = "FAILED"
         record["freshness_state"] = "REFRESH_FAILED"
         _mark_no_artifact(record, "SOURCE_PATH_CHANGED")
+        finish()
         return record
     if not source_path.is_file():
         record["error_code"] = "SOURCE_UNAVAILABLE"
         _mark_no_artifact(record, "SOURCE_UNAVAILABLE")
+        finish()
         return record
 
     name = lane["_snapshot_filename"]
@@ -336,31 +391,57 @@ def _refresh_lane(lane: Dict[str, Any], run_dir: Path, container_dir: str) -> Di
     final = run_dir / name
     source_con = None
     try:
+        stage, operation = "SOURCE_OPEN", "SOURCE_STAT"
         if source_path.stat().st_size > MAX_SNAPSHOT_BYTES:
             raise SnapshotError("SOURCE_SIZE_LIMIT")
         uri = "file:" + quote(source_path.resolve().as_posix(), safe="/:") + "?mode=ro"
+        stage, operation = "SOURCE_OPEN", "SOURCE_CONNECT"
         source_con = sqlite3.connect(uri, uri=True, timeout=10)
+        diagnostic["completed_operations"].append(operation)
+        stage, operation = "SOURCE_OPEN", "SOURCE_QUERY_ONLY"
         source_con.execute("PRAGMA query_only=ON")
+        diagnostic["completed_operations"].append(operation)
+        stage, operation = "DEST_CREATE", "DEST_CONNECT"
         with closing(sqlite3.connect(str(temporary), timeout=10)) as target_con:
+            diagnostic["destination_created"] = temporary.is_file()
+            diagnostic["completed_operations"].append(operation)
+            stage, operation = "SQLITE_BACKUP", "BACKUP"
             source_con.backup(target_con)
+            diagnostic["backup_completed"] = True
+            diagnostic["completed_operations"].append(operation)
+            stage, operation = "DEST_CREATE", "DEST_CLOSE"
+        stage, operation = "SOURCE_OPEN", "SOURCE_NONMUTATION_CHECK"
         record["source_total_changes"] = source_con.total_changes
         if record["source_total_changes"] != 0:
             raise SnapshotError("SOURCE_NONMUTATION_VIOLATION")
+        stage, operation = "SOURCE_OPEN", "SOURCE_CLOSE"
         source_con.close()
         source_con = None
 
+        stage, operation = "DEST_CREATE", "COPY_CONNECT"
         with closing(sqlite3.connect(str(temporary), timeout=10)) as copy_con:
+            stage, operation = "DEST_CREATE", "COPY_JOURNAL_DELETE"
             copy_con.execute("PRAGMA journal_mode=DELETE")
+            stage, operation = "DEST_CREATE", "COPY_QUERY_ONLY"
             copy_con.execute("PRAGMA query_only=ON")
+            stage, operation = "INTEGRITY_CHECK", "INTEGRITY_QUERY"
             integrity = copy_con.execute("PRAGMA integrity_check").fetchone()
-            integrity_value = str(integrity[0]) if integrity else "no_result"
+            diagnostic["integrity_completed"] = True
+            diagnostic["completed_operations"].append(operation)
+            # A corrupt index diagnostic can include stored key values.
+            # Retain the verdict, never its raw SQLite text.
+            integrity_value = "ok" if integrity and integrity[0] == "ok" else "failed"
+            record["integrity_result"]["sqlite_integrity"] = integrity_value
+            if integrity_value != "ok":
+                raise SnapshotError("SQLITE_INTEGRITY_FAILED", record["integrity_result"])
+            stage, operation = "FK_CHECK", "FK_QUERY"
             fk_count = sum(1 for _ in copy_con.execute("PRAGMA foreign_key_check"))
+            diagnostic["fk_completed"] = True
+            diagnostic["completed_operations"].append(operation)
             record["integrity_result"] = {
                 "sqlite_integrity": integrity_value,
                 "foreign_key_violations": fk_count,
             }
-            if integrity_value != "ok":
-                raise SnapshotError("SQLITE_INTEGRITY_FAILED", record["integrity_result"])
             if fk_count:
                 raise SnapshotError("FOREIGN_KEY_CHECK_FAILED", record["integrity_result"])
             as_of_spec = lane["_child_as_of_spec"]
@@ -368,10 +449,11 @@ def _refresh_lane(lane: Dict[str, Any], run_dir: Path, container_dir: str) -> Di
                 record["unavailable_reasons"]["child_as_of"] = lane["unavailable_reasons"]["child_as_of"]
                 record["unavailable_reasons"]["child_as_of_clock"] = lane["unavailable_reasons"]["child_as_of"]
             else:
+                stage, operation = "METADATA_READ", "AS_OF_QUERY"
                 try:
                     native_value = _read_scalar(copy_con, as_of_spec["query"])
-                except sqlite3.Error:
-                    raise SnapshotError("AS_OF_QUERY_FAILED")
+                except sqlite3.Error as exc:
+                    raise SnapshotError("AS_OF_QUERY_FAILED") from exc
                 record["child_as_of_clock"] = as_of_spec["clock"]
                 native_time = _parse_native_time(
                     native_value, naive_timezone=as_of_spec.get("naive_timezone")
@@ -388,22 +470,29 @@ def _refresh_lane(lane: Dict[str, Any], run_dir: Path, container_dir: str) -> Di
             if schema_spec is None:
                 record["unavailable_reasons"]["schema_version"] = lane["unavailable_reasons"]["schema_version"]
             else:
+                stage, operation = "SCHEMA_READ", "SCHEMA_QUERY"
                 try:
                     version = _read_scalar(copy_con, schema_spec["query"])
-                except sqlite3.Error:
-                    raise SnapshotError("SCHEMA_QUERY_FAILED")
+                except sqlite3.Error as exc:
+                    raise SnapshotError("SCHEMA_QUERY_FAILED") from exc
                 if version is None:
                     record["unavailable_reasons"]["schema_version"] = "NO_SCHEMA_VERSION_VALUE"
                 elif not isinstance(version, (str, int)):
                     raise SnapshotError("INVALID_SCHEMA_VERSION_VALUE")
                 else:
                     record["schema_version"] = str(version)
+            stage, operation = "DEST_CREATE", "COPY_CLOSE"
 
+        stage, operation = "HASH", "COPY_STAT"
         size = temporary.stat().st_size
         if size > MAX_SNAPSHOT_BYTES:
             raise SnapshotError("SNAPSHOT_SIZE_LIMIT")
+        stage, operation = "HASH", "COPY_HASH"
         digest = _sha256(temporary)
+        stage, operation = "PUBLICATION", "COPY_RENAME"
         os.replace(str(temporary), str(final))
+        diagnostic["completed_operations"].append(operation)
+        stage, operation = "METADATA_READ", "FRESHNESS_CALCULATION"
         created = _utc_now()
         record["snapshot_created_at"] = _iso_utc(created)
         record["snapshot_path"] = container_dir.rstrip("/") + "/" + name
@@ -423,32 +512,41 @@ def _refresh_lane(lane: Dict[str, Any], run_dir: Path, container_dir: str) -> Di
                 "UNKNOWN" if native_age < 0 else
                 "FRESH" if native_age <= max_age else "STALE"
             )
+        finish()
         return record
     except SnapshotError as exc:
+        failed(exc)
         record["integrity_result"] = exc.integrity or record["integrity_result"]
         record["error_code"] = exc.code
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        failed(exc)
         record["error_code"] = "SQLITE_REFRESH_FAILED"
-    except OSError:
+    except OSError as exc:
+        failed(exc)
         record["error_code"] = "SNAPSHOT_IO_FAILED"
-    except Exception:
+    except Exception as exc:
+        failed(exc)
         # An unexpected implementation/source-shape error is still an
         # attributable failed attempt, never a healthy or omitted lane.
         record["error_code"] = "UNEXPECTED_REFRESH_FAILURE"
     finally:
         if source_con is not None:
             record["source_total_changes"] = source_con.total_changes
-            source_con.close()
+            try:
+                source_con.close()
+            except sqlite3.Error as exc:
+                diagnostic["cleanup_errors"].append({"operation": "SOURCE_CLOSE", "exception_class": type(exc).__name__})
         if temporary.exists():
             try:
                 temporary.unlink()
-            except OSError:
+            except OSError as exc:
                 # It remains an unreferenced .partial, never current input.
-                pass
+                diagnostic["cleanup_errors"].append({"operation": "PARTIAL_UNLINK", "exception_class": type(exc).__name__})
     record["refresh_outcome"] = "FAILED"
     record["freshness_state"] = "REFRESH_FAILED"
     record["child_execution_freshness"] = "UNKNOWN"
     _mark_no_artifact(record, record["error_code"])
+    finish()
     return record
 
 
@@ -457,7 +555,8 @@ def produce(spec: Dict[str, Any], output_root: Path, container_dir: str = "/app/
     output_root = Path(output_root)
     lanes = _validate_spec(spec, output_root, container_dir)
     run_dir = Path(tempfile.mkdtemp(prefix="snapshot-v1-", dir=str(output_root)))
-    records = [_refresh_lane(lane, run_dir, container_dir) for lane in lanes]
+    diagnostics: List[Dict[str, Any]] = []
+    records = [_refresh_lane(lane, run_dir, container_dir, diagnostics) for lane in lanes]
     manifest = {
         "snapshot_contract_version": SNAPSHOT_CONTRACT_VERSION,
         "observed_at": _iso_utc(_utc_now()),
@@ -471,6 +570,13 @@ def produce(spec: Dict[str, Any], output_root: Path, container_dir: str = "/app/
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(str(temporary), str(final))
+    # Separate diagnostic artifact, NOT an additive manifest-v1.0 field.
+    # Keep the normative snapshot contract and freshness semantics unchanged.
+    with (run_dir / "refresh-diagnostics.json").open("x", encoding="utf-8") as stream:
+        json.dump({"diagnostic_format_version": "1.0", "lanes": diagnostics}, stream, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
     return final, manifest
 
 
