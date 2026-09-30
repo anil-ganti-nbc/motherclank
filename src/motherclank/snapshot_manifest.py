@@ -362,7 +362,7 @@ def verify_copy(record: dict[str, Any], adapter_path: Path) -> None:
 
 def lineage(record: dict[str, Any]) -> dict[str, Any]:
     """Small, secret-free provenance that every derived consumer can cite."""
-    return {key: record[key] for key in (
+    result = {key: record[key] for key in (
         "snapshot_contract_version", "clank_id", "instance_id", "lane_id",
         "source_host", "source_path", "snapshot_created_at", "child_as_of",
         "child_as_of_clock", "schema_version", "child_source_revision",
@@ -373,3 +373,10 @@ def lineage(record: dict[str, Any]) -> dict[str, Any]:
         "observed_at", "freshness_horizon", "error_code",
         "last_good_snapshot_ref",
     )}
+    # Optional hash-linked transport evidence is distinct from the normative
+    # ADR manifest fields. Never replace child_source_revision with an exporter
+    # revision merely to preserve the separately versioned transport identity.
+    if "child_export" in record:
+        from .feature_phone_export import validate_lineage
+        result["child_export"] = validate_lineage(record["child_export"], record=record)
+    return result

@@ -1,0 +1,74 @@
+COPS-000081 sealed Feature Phone integration — isolated candidate only
+
+Authority
+---------
+ADR-0016 remains the binding narrow observer decision. The Feature Phone child
+export format 1.0 is a different contract from ADR snapshot manifest 1.0; neither
+is the observer surface version 0.2. This candidate descends from the reviewed
+e93195e95dc9b1bb103535c0bf53dfdd3381e261 correction. No production task, child
+writer, live Diagnostic, Board admission or fleet promotion is authorized here.
+
+Component ownership
+-------------------
+Export request: owner host, through the fixed no-argument hash-pinned
+feature_phone_request_export_cops_000081.py helper. It is NOT installed into the
+Motherclank image or configured as a general command interface.
+Export: exact Feature Phone 99405de0829e5baade4151eb1c2a0f2374b49613 image
+sha256:eccdb14e96634a255ce37e6ea9b9391997c8845710fe3fd8cea52129c3612478.
+Publication: child-owned fixed finalizer, independently pinned to
+1a02db7ab0daadc3e7d5aaeca45eee1daf4bfccdcaa5b76826555d6ac6114fbe.
+Retention: owner-controlled policy 1.0; bounded capacities, append-only pins,
+no automatic pruning. Historical accepted exports remain evidence. Capacity
+exhaustion requires owner action, not an ungoverned delete or stale reuse.
+Consumer read: non-root Motherclank, UID:GID 10001:10001, caps zero, no-new-
+privileges, network none, read-only root. Only accepted sealed output is bound
+at /app/feature-phone-accepted read-only. No canonical Feature Phone DB,
+private staging, publisher namespace, Docker socket, child commands or webhook.
+The four existing CTW/KTW/Semiconductor/OEM RO source paths are unchanged.
+
+Fresh request and translation
+-----------------------------
+Each owner invocation creates a unique private child staging attempt, observes
+the child collection lock with bounded timeout, and removes the stopped
+producer before creating the guarded publisher. A root-sealed receipt and
+independent request context bind request ID, request start, prior attempt ID,
+and receipt SHA. Unresolved container quiescence is contract-fatal.
+
+The consumer verifies exact image/revision, root seal (directories 0550, files
+0440), exact three-file layout, kernel RO mount, metadata/publication hashes,
+copy hash/size, copy integrity/FKs, schema and identities. It opens only the
+accepted copy. Its translator contains no child-domain SQL or process-control
+interface. The Diagnostic package fbf286b45594280506c7c00ad54162259a82e0c8 owns
+the child-domain observer interpretation.
+
+Instance identity is feature-phone-clank-nas-cops-000072, lane experimental.
+canonical source_path is retained as provenance, NOT mounted by the consumer.
+snapshot_path is the accepted copy's absolute consumer path. snapshot_created_at
+is export completion; child_as_of remains the native child run timestamp, never
+export/publication time. Missing child evidence stays reasoned null/UNKNOWN.
+child_source_revision stays null when not evidenced by the database; exporter
+and deployed revisions are separately preserved. The existing 36000-second
+native freshness policy is not expanded to the child verifier's default.
+
+Ordinary failed refresh
+-----------------------
+A typed ordinary lock, timeout, unavailable source or retention-capacity fault
+has no current artifact. Translation yields FAILED/REFRESH_FAILED or
+UNAVAILABLE/UNAVAILABLE with independently UNKNOWN child execution when no
+current native evidence exists. last_good_snapshot_ref is historical only.
+Failed-outcome handling occurs BEFORE successful-path/copy binding and never
+opens last-good. Other children continue; Feature Phone becomes UNKNOWN.
+Malformed metadata, hash/seal/identity/mount compromise aborts contract intake.
+
+Proof and activation boundary
+-----------------------------
+Windows unit/fixture proof is not actual NAS Linux or production proof. A new
+exact source archive/image must pass NAS QA, then an isolated fresh-export
+five-child pipeline and a separate failed-export fixture pipeline. Both must
+preserve input hashes and all four other lanes; KTW is the sole QC lane.
+Detached Motherclank var copies, not live var, receive derived outputs.
+OEM natural sidecar coordination remains unchanged; never manually run a child.
+
+SAFE_TO_PREPARE_SECOND_CUTOVER stays NO until these isolated gates pass. Any
+subsequent task-14 cutover is a separate reviewed checkpoint. This tranche does
+not change task 14, admission markers, task 15, or Board COPS-000074.
