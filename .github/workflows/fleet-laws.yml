@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: anil-ganti-nbc/diagnostic-clank
-          ref: diagnostic-clank-2026-08
+          ref: 0770dd5f15be8a4a89bc43e5dd9644674d6683c0
           path: diagnostic-clank
       - uses: actions/setup-python@v5
         with:

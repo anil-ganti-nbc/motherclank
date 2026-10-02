@@ -1,0 +1,20 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG MOTHERCLANK_SHA
+ARG ADAPTER_SHA
+COPY motherclank/ /app/cops-000074/motherclank/
+COPY diagnostic-clank/ /app/cops-000074/diagnostic-clank/
+LABEL org.opencontainers.image.revision="${MOTHERCLANK_SHA}" \
+      clank.adapter_revision="${ADAPTER_SHA}" \
+      clank.snapshot_contract="1.0" \
+      clank.observer_contract="0.2" \
+      clank.proof_scope="COPS-000074-governed-production"
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MOTHERCLANK_SOURCE_REVISION=${MOTHERCLANK_SHA} \
+    DIAGNOSTIC_ADAPTER_SOURCE_REVISION=${ADAPTER_SHA} \
+    PYTHONPATH=/app/cops-000074/motherclank/src:/app/cops-000074/diagnostic-clank/clank-fleet/src:/app/cops-000074/diagnostic-clank/clank-runtime/src
+WORKDIR /app/cops-000074/motherclank
+USER 10001:10001
+ENTRYPOINT ["python", "-m", "motherclank.cli"]
+CMD ["--help"]

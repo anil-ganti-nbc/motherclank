@@ -20,14 +20,9 @@ from motherclank.feature_phone_export import (
     validate_lineage,
 )
 from motherclank.snapshot_manifest import load_manifest, verify_copy
+from motherclank.observer_topology import Topology, read_inventory, unique_pairs
 
-ADAPTER_SHA = "fbf286b45594280506c7c00ad54162259a82e0c8"
-LANES = {
-    "chinese-tech-wire": ("ctw-nas-canonical", "canonical", "/volume2/clank/chinese-tech-wire/state/ctw.db", "chinese_tech_wire.db", None),
-    "korean-tech-wire": ("ktw-nas-canonical", "canonical", "/volume2/clank/korean-tech-wire/state/korean_tech_wire.db", "korean_tech_wire.db", "6"),
-    "semiconductor-intelligence": ("si-nas-experimental-tier-b", "experimental-tier-b", "/volume2/clank/semiconductor-intelligence/state/semi_intel.db", "semiconductor_intelligence.db", "c7d8e9f0a1b2"),
-    "oem-radar": ("oem-nas-canonical", "canonical", "/volume2/clank/oem-radar/canonical-cops-000072/state/radar.db", "radar.db", "7"),
-}
+ADAPTER_SHA = "0770dd5f15be8a4a89bc43e5dd9644674d6683c0"
 
 
 class ProofError(ValueError):
@@ -61,23 +56,18 @@ def ro_file(path):
     require(os.statvfs(str(path)).f_flag & os.ST_RDONLY, "INPUT_NOT_KERNEL_RO")
 
 
-def validate_inputs(manifest, registry, inventory, image_id, expected_fp):
+def validate_inputs(manifest, registry, inventory, image_id, expected_fp, spec):
     require((os.geteuid(), os.getegid()) == (10001, 10001), "NONROOT_REQUIRED")
-    for path in (manifest, registry, inventory):
+    for path in (manifest, registry, inventory, spec):
         ro_file(path)
+    topology = Topology(read_inventory(inventory), adapter_sha=ADAPTER_SHA, image_id=image_id)
+    topology.validate_spec(json.loads(spec.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs))
     doc = load_manifest(manifest)
+    topology.validate_rows(doc["lanes"])
     rows = {row["clank_id"]: row for row in doc["lanes"]}
-    reg = json.loads(registry.read_text(encoding="utf-8"))
-    require(set(rows) == set(LANES) | {CLANK_ID}, "FIVE_LANES_REQUIRED")
-    require(reg.get("extend_builtin") is False
-            and set(reg) == set(rows) | {"extend_builtin"}, "REGISTRY_SCOPE_DRIFT")
-    require({cid for cid in rows if reg[cid].get("qc") is True} == {"korean-tech-wire"},
-            "KTW_SOLE_QC_REQUIRED")
-    text = inventory.read_text(encoding="utf-8")
-    require("inventory_status: INVENTORY_INCOMPLETE" in text
-            and "board_admission: BLOCKED_SEPARATE_COPS-000074" in text,
-            "INVENTORY_BOUNDARY_LOST")
-    inputs = [manifest, registry, inventory]
+    reg = json.loads(registry.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
+    topology.validate_registry(reg, rows[CLANK_ID])
+    inputs = [manifest, registry, inventory, spec]
     for cid, row in rows.items():
         require(row["adapter_package_sha"] == ADAPTER_SHA
                 and bare(row["adapter_artifact_sha256"]) == bare(image_id), "ADAPTER_IDENTITY_DRIFT")
@@ -112,7 +102,12 @@ def validate_inputs(manifest, registry, inventory, image_id, expected_fp):
                 require(digest(path) == bare(lineage[key]), "SEALED_METADATA_HASH_DRIFT")
                 inputs.append(path)
         else:
-            instance, lane, source, filename, schema = LANES[cid]
+            configured = topology.children[cid]
+            binding = configured["observer"]
+            spec_row = binding["snapshot_spec"]
+            instance, lane, source, filename, schema = (
+                configured["instance_id"], binding["registry"]["lane_id"], configured["database_path"],
+                spec_row["snapshot_filename"], binding["expected_schema_version"])
             require(row["refresh_outcome"] == "SUCCESS", "OTHER_CHILD_REFRESH_FAILED")
             require((row["instance_id"], row["lane_id"], row["source_path"], row["snapshot_path"])
                     == (instance, lane, source, "/app/real-state/" + filename), "OTHER_CHILD_BINDING_DRIFT")
@@ -123,7 +118,7 @@ def validate_inputs(manifest, registry, inventory, image_id, expected_fp):
                     "OTHER_REGISTRY_SCHEMA_DRIFT")
             require((None if schema is None else str(row["schema_version"])) == schema,
                     "OTHER_SCHEMA_DRIFT")
-            require(row["freshness_horizon"]["max_age_seconds"] == 10800, "OTHER_HORIZON_DRIFT")
+            require(row["freshness_horizon"] == spec_row["freshness_horizon"], "OTHER_HORIZON_DRIFT")
             copy = manifest.parent / filename
         require(reg[cid]["db"] == (str(copy) if cid == CLANK_ID else copy.name),
                 "ADAPTER_COPY_PATH_DRIFT")
@@ -148,12 +143,13 @@ def harvest_truth(var, manifest, registry, inventory, expected_fp):
             and record.get("adapter_registry_source_sha256") == "sha256:" + digest(registry),
             "DERIVED_PROVENANCE_DRIFT")
     clanks = record.get("clanks", {})
-    require(set(clanks) == set(LANES) | {CLANK_ID}, "DERIVED_LANE_SET_DRIFT")
+    expected = {row["repository"] for row in read_inventory(inventory)["deployments"]}
+    require(set(clanks) == expected, "DERIVED_LANE_SET_DRIFT")
     states = {cid: block.get("snapshot_provenance", {}).get("effective_freshness_state")
               for cid, block in clanks.items()}
     require(all(states[cid] == "FRESH" and not clanks[cid].get("observation")
-                for cid in ("korean-tech-wire", "oem-radar")), "PROOF_PAIR_NOT_FRESH")
-    require(all(states[cid] == "UNKNOWN" for cid in ("chinese-tech-wire", "semiconductor-intelligence")),
+                for cid in ("korean-tech-wire", "oem-radar") if cid in expected), "PROOF_PAIR_NOT_FRESH")
+    require(all(states[cid] == "UNKNOWN" for cid in ("chinese-tech-wire", "semiconductor-intelligence") if cid in expected),
             "HISTORICAL_UNKNOWN_BOUNDARY_LOST")
     fp = clanks[CLANK_ID]
     if expected_fp == "FAILED":
@@ -171,7 +167,7 @@ def harvest_truth(var, manifest, registry, inventory, expected_fp):
     return {"status": "HARVEST_TRUTH_PASS", "expected_feature_phone": expected_fp,
             "effective_freshness": states, "manifest_sha256": target,
             "snapshot_content_hash": record["content_hash"],
-            "other_four_continued_at_m0": True}
+            "governed_children": sorted(expected), "governed_children_continued_at_m0": True}
 
 
 def synthesis_truth(var, truth):
@@ -185,7 +181,7 @@ def synthesis_truth(var, truth):
                 matches.append(value)
     require(len(matches) == 1, "ONE_CURRENT_SYNTHESIS_REQUIRED")
     claims = matches[0].get("clanks", {})
-    require(set(claims) == set(LANES) | {CLANK_ID}, "SYNTHESIS_LANE_SET_DRIFT")
+    require(set(claims) == set(truth["governed_children"]), "SYNTHESIS_LANE_SET_DRIFT")
     for cid, claim in claims.items():
         require(claim.get("state") in {"HEALTHY", "DEGRADED", "FAILED", "UNKNOWN"},
                 "SYNTHESIS_STATE_INVALID")
@@ -206,15 +202,16 @@ def main():
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--inventory", type=Path, required=True)
+    parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--image-id", required=True)
     parser.add_argument("--expected-feature-phone", choices=("SUCCESS", "FAILED"), required=True)
     parser.add_argument("--var", type=Path)
     args = parser.parse_args()
     try:
         _, inputs = validate_inputs(args.manifest, args.registry, args.inventory,
-                                    args.image_id, args.expected_feature_phone)
+                                    args.image_id, args.expected_feature_phone, args.spec)
         if args.mode == "preflight":
-            result = {"status": "SEALED_FIVE_INPUTS_PASS", "expected_feature_phone": args.expected_feature_phone,
+            result = {"status": "SEALED_GOVERNED_INPUTS_PASS", "expected_feature_phone": args.expected_feature_phone,
                       "input_hashes": {str(path): digest(path) for path in inputs}}
         else:
             require(args.var is not None, "VAR_REQUIRED")

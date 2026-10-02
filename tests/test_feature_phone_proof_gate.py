@@ -8,12 +8,14 @@ from types import SimpleNamespace
 import pytest
 from motherclank import feature_phone_export as fp
 from test_feature_phone_export import ARGS, NOW, _failure
+from test_observer_topology import governed_case, IMAGE
+from motherclank.observer_topology import TopologyError
 
 spec = importlib.util.spec_from_file_location(
     "sealed_proof_gate", Path(__file__).resolve().parents[1] / "scripts/nas_feature_phone_proof_gate.py")
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
-IMAGE = "sha256:" + "b" * 64
+SQLITE_CHILDREN = {r['repository'] for r in governed_case()[0]['deployments']} - {fp.CLANK_ID}
 
 
 @pytest.fixture
@@ -26,23 +28,26 @@ def proof(tmp_path, monkeypatch):
     failure.update(adapter_package_sha=gate.ADAPTER_SHA, adapter_artifact_sha256=IMAGE,
                    source_path=gate.CANONICAL_SOURCE_PATH)
     rows = [failure]
-    reg = {"extend_builtin": False, fp.CLANK_ID: {
-        "qc": False, "instance_id": fp.INSTANCE_ID, "lane_id": fp.LANE_ID,
-        "expected_schema_version": "7",
-        "db": "/app/feature-phone-accepted/unavailable/feature_phone_clank.db"}}
-    for cid, (instance, lane, source, filename, schema) in gate.LANES.items():
+    inventory_doc, spec_doc, reg = governed_case()
+    for deployment in inventory_doc['deployments']:
+        cid = deployment['repository']
+        if cid == fp.CLANK_ID:
+            continue
+        observer = deployment['observer']
+        lane_spec = observer['snapshot_spec']
+        instance, lane, source, filename, schema = (deployment['instance_id'], reg[cid]['lane_id'],
+            deployment['database_path'], reg[cid]['db'], observer['expected_schema_version'])
         rows.append(dict(clank_id=cid, adapter_package_sha=gate.ADAPTER_SHA,
                          adapter_artifact_sha256=IMAGE, source_host="Anil_NAS",
                          refresh_outcome="SUCCESS", instance_id=instance, lane_id=lane,
                          source_path=source, snapshot_path="/app/real-state/" + filename,
-                         schema_version=schema, freshness_horizon={"max_age_seconds": 10800}))
-        reg[cid] = dict(instance_id=instance, lane_id=lane, db=filename,
-                        expected_schema_version=schema, qc=(cid == "korean-tech-wire"))
+                         schema_version=schema, freshness_horizon=lane_spec['freshness_horizon'],
+                         observer_contract_version='0.2', child_deployed_revision=deployment['deployed_commit_sha']))
     manifest, registry, inventory = [tmp_path / name for name in
                                      ("manifest.json", "registry.json", "inventory.yaml")]
     registry.write_text(json.dumps(reg), encoding="utf-8")
-    inventory.write_text("inventory_status: INVENTORY_INCOMPLETE\n"
-                         "board_admission: BLOCKED_SEPARATE_COPS-000074\n", encoding="utf-8")
+    inventory.write_text(json.dumps(inventory_doc), encoding='utf-8')
+    inventory.with_name('spec.json').write_text(json.dumps(spec_doc), encoding='utf-8')
     monkeypatch.setattr(gate, "load_manifest", lambda p: {"lanes": rows})
     monkeypatch.setattr(gate, "os", SimpleNamespace(geteuid=lambda: 10001, getegid=lambda: 10001))
     opened = []
@@ -54,10 +59,10 @@ def proof(tmp_path, monkeypatch):
 
 def test_failed_export_admitted_no_historical_db_read_four_continue(proof):
     manifest, registry, inventory, rows, opened, verified = proof
-    checked, inputs = gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED")
+    checked, inputs = gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED", inventory.with_name("spec.json"))
     assert checked[fp.CLANK_ID]["last_good_snapshot_ref"] == "d" * 64
-    assert set(verified) == set(gate.LANES)
-    assert len(inputs) == 7  # three envelope/config files plus four current copies
+    assert set(verified) == SQLITE_CHILDREN
+    assert len(inputs) == 4 + len(SQLITE_CHILDREN)
     assert not any("feature-phone-accepted" in str(p) for p in opened)
 
 
@@ -69,21 +74,21 @@ def test_failed_export_admitted_no_historical_db_read_four_continue(proof):
 def test_failed_export_cannot_be_promoted_or_identity_aliased(proof, change):
     manifest, registry, inventory, rows, *_ = proof
     rows[0].update(change)
-    with pytest.raises((gate.ProofError, fp.FeaturePhoneExportError)):
-        gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED")
+    with pytest.raises((gate.ProofError, fp.FeaturePhoneExportError, TopologyError)):
+        gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED", inventory.with_name("spec.json"))
 
 
 def test_proof_pair_or_config_integrity_failure_is_fatal(proof):
     manifest, registry, inventory, rows, *_ = proof
     rows[1]["refresh_outcome"] = "FAILED"
     with pytest.raises(gate.ProofError, match="OTHER_CHILD_REFRESH_FAILED"):
-        gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED")
+        gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED", inventory.with_name("spec.json"))
 
 
 def test_failed_refresh_not_misdiagnosed_as_copy_binding(proof):
     manifest, registry, inventory, rows, *_ = proof
     with pytest.raises(gate.ProofError, match="FAILED_EXPORT_NOT_TRUTHFUL") as error:
-        gate.validate_inputs(manifest, registry, inventory, IMAGE, "SUCCESS")
+        gate.validate_inputs(manifest, registry, inventory, IMAGE, "SUCCESS", inventory.with_name("spec.json"))
     assert "copy_binding_mismatch" not in str(error.value)
 
 
@@ -92,8 +97,8 @@ def test_failed_export_registry_cannot_point_to_old_success(proof):
     reg = json.loads(registry.read_text())
     reg[fp.CLANK_ID]["db"] = "/app/feature-phone-accepted/old/feature_phone_clank.db"
     registry.write_text(json.dumps(reg), encoding="utf-8")
-    with pytest.raises(gate.ProofError, match="FAILED_EXPORT_REGISTRY_POINTS_TO_OLD_COPY"):
-        gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED")
+    with pytest.raises(TopologyError, match="EXACT_REGISTRY_MAPPING_DRIFT"):
+        gate.validate_inputs(manifest, registry, inventory, IMAGE, "FAILED", inventory.with_name("spec.json"))
 
 
 @pytest.mark.parametrize("state,linked,reject", [
@@ -103,15 +108,15 @@ def test_failed_export_registry_cannot_point_to_old_success(proof):
 def test_m1_failed_export_never_promoted_and_exact_m0_link_required(tmp_path, state, linked, reject):
     directory = tmp_path / "syntheses"
     directory.mkdir()
-    states = {cid: "FRESH" for cid in gate.LANES}
+    states = {cid: "FRESH" for cid in SQLITE_CHILDREN}
     states[fp.CLANK_ID] = "UNKNOWN"
-    claims = {cid: {"state": "HEALTHY"} for cid in gate.LANES}
+    claims = {cid: {"state": "HEALTHY"} for cid in SQLITE_CHILDREN}
     claims[fp.CLANK_ID] = {"state": state}
     (directory / "proof.jsonl").write_text(json.dumps({
         "snapshot_hash": linked, "content_hash": "m1-current", "clanks": claims}) + "\n",
         encoding="utf-8")
     truth = {"snapshot_content_hash": "current", "expected_feature_phone": "FAILED",
-             "effective_freshness": states}
+             "effective_freshness": states, "governed_children": sorted(states)}
     if reject:
         with pytest.raises(gate.ProofError):
             gate.synthesis_truth(tmp_path, truth)

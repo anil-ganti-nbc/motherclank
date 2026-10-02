@@ -11,13 +11,15 @@ import importlib.util
 import json
 import stat
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
 
 from motherclank import adapters, cli, feature_phone_export as fp, qc_corpus, synthesis
 from motherclank.snapshot_manifest import load_manifest
+from motherclank.observer_topology import Topology, TopologyError
+from test_observer_topology import governed_case
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 IMAGE_ID = "sha256:" + "c" * 64
@@ -25,26 +27,26 @@ IMAGE_ID = "sha256:" + "c" * 64
 
 @pytest.fixture
 def consumer(monkeypatch):
+    # NAS provenance is a POSIX path, even when hermetic tests run on Windows.
+    # Actual temp-file I/O retains the native Path implementation.
+    from motherclank import snapshot_manifest
+    monkeypatch.setattr(snapshot_manifest, "Path", lambda value: (
+        PurePosixPath(value) if str(value).startswith("/volume2/") else Path(value)))
     monkeypatch.syspath_prepend(str(SCRIPTS))
     spec = importlib.util.spec_from_file_location(
         "nas_feature_phone_consumer_test", SCRIPTS / "nas_feature_phone_consumer.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.test_inventory, module.test_spec, module.test_registry = governed_case()
+    module.test_topology = Topology(module.test_inventory, adapter_sha=module.ADAPTER_SHA, image_id=IMAGE_ID)
+    # Test fixture compatibility names, deliberately not production globals.
+    module.SOURCES = module.test_topology.sources
     return module
 
 
 def _spec(module):
-    return {
-        "snapshot_contract_version": "1.0",
-        "allowed_source_roots": [root for root, _ in module.SOURCES.values()],
-        "lanes": [{
-            "clank_id": clank_id,
-            "source_path": root + "/" + filename,
-            "adapter_package_sha": module.ADAPTER_SHA,
-            "adapter_artifact_sha256": IMAGE_ID,
-        } for clank_id, (root, filename) in module.SOURCES.items()],
-    }
+    return copy.deepcopy(module.test_spec)
 
 
 def _iso(value):
@@ -83,6 +85,10 @@ def _row(module, tmp_path, clank_id, *, failed=False):
                    last_good_snapshot_ref="e" * 64)
         row["unavailable_reasons"].update({key: "NO_CURRENT_EXPORT_AFTER_LOCK" for key in (
             "snapshot_created_at", "child_as_of", "child_as_of_clock", "schema_version")})
+    configured = module.test_topology.children[clank_id]
+    binding = configured["observer"]
+    row.update(instance_id=configured["instance_id"], lane_id=binding["registry"]["lane_id"],
+               source_path=configured["database_path"], child_deployed_revision=configured["deployed_commit_sha"])
     return row
 
 
@@ -95,43 +101,34 @@ def _four_manifest(module, tmp_path):
 
 
 def _registry(module):
-    return {
-        "extend_builtin": False,
-        **{clank_id: {"module": "diagnostic.adapters", "class": "FixtureAdapter", "db": clank_id + ".db",
-                      "instance_id": clank_id + "-nas", "lane_id": "production",
-                      "qc": clank_id == "korean-tech-wire", "expected_schema_version": "7"}
-           for clank_id in module.SOURCES},
-        fp.CLANK_ID: {"module": "diagnostic.feature_phone", "class": "FeaturePhoneAdapter",
-                      "db": "feature_phone_clank.db", "instance_id": "old-soak-identity",
-                      "lane_id": "experimental", "expected_schema_version": "7", "qc": False},
-    }
+    return copy.deepcopy(module.test_registry)
 
 
 def test_strict_four_source_spec_excludes_feature_phone_canonical(consumer):
     spec = _spec(consumer)
-    consumer.validate_four_spec(spec, IMAGE_ID)
+    consumer.test_topology.validate_spec(spec)
     assert fp.CLANK_ID not in {row["clank_id"] for row in spec["lanes"]}
     assert not any("feature-phone" in root for root in spec["allowed_source_roots"])
 
 
 @pytest.mark.parametrize("mutation,code", [
     (lambda s: s.update(snapshot_contract_version="0.2"), "SNAPSHOT_CONTRACT_DRIFT"),
-    (lambda s: s["lanes"].append({"clank_id": fp.CLANK_ID}), "FOUR_SOURCE_SET_REQUIRED"),
-    (lambda s: s["lanes"].pop(), "FOUR_SOURCE_SET_REQUIRED"),
-    (lambda s: s["lanes"][0].update(clank_id=fp.CLANK_ID), "FOUR_SOURCE_SET_DRIFT"),
+    (lambda s: s["lanes"].append({"clank_id": fp.CLANK_ID}), "GOVERNED_SOURCE_SET_DRIFT"),
+    (lambda s: s["lanes"].pop(), "GOVERNED_SOURCE_SET_DRIFT"),
+    (lambda s: s["lanes"][0].update(clank_id=fp.CLANK_ID), "GOVERNED_SOURCE_SET_DRIFT"),
     (lambda s: s["allowed_source_roots"].append("/volume2/clank/feature-phone-clank/state"), "CANONICAL_ROOT_SET_DRIFT"),
     (lambda s: s["allowed_source_roots"].append("/volume2/clank"), "CANONICAL_ROOT_SET_DRIFT"),
     (lambda s: s["allowed_source_roots"].append(s["allowed_source_roots"][0]), "CANONICAL_ROOT_SET_DRIFT"),
-    (lambda s: s["lanes"][0].update(source_path="/tmp/aliased.db"), "CANONICAL_PATH_DRIFT"),
-    (lambda s: s["lanes"][0].update(adapter_package_sha="f" * 40), "ADAPTER_IDENTITY_DRIFT"),
-    (lambda s: s["lanes"][0].update(adapter_artifact_sha256="b" * 64), "ADAPTER_IDENTITY_DRIFT"),
-    (lambda s: s["lanes"][0].update(adapter_artifact_sha256=None), "ADAPTER_IDENTITY_DRIFT"),
+    (lambda s: s["lanes"][0].update(source_path="/tmp/aliased.db"), "EXACT_SNAPSHOT_SPEC_DRIFT"),
+    (lambda s: s["lanes"][0].update(adapter_package_sha="f" * 40), "EXACT_SNAPSHOT_SPEC_DRIFT"),
+    (lambda s: s["lanes"][0].update(adapter_artifact_sha256="b" * 64), "EXACT_SNAPSHOT_SPEC_DRIFT"),
+    (lambda s: s["lanes"][0].update(adapter_artifact_sha256=None), "EXACT_SNAPSHOT_SPEC_DRIFT"),
 ])
 def test_spec_authority_drift_rejected_before_produce(consumer, mutation, code):
     spec = _spec(consumer)
     mutation(spec)
-    with pytest.raises(consumer.IntakeError, match=code):
-        consumer.validate_four_spec(spec, IMAGE_ID)
+    with pytest.raises(TopologyError, match=code):
+        consumer.test_topology.validate_spec(spec)
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -141,9 +138,9 @@ def test_combine_preserves_four_source_evidence_and_binds_only_accepted_copy(con
     registry = _registry(consumer)
     original_registry = copy.deepcopy(registry)
     row = _row(consumer, tmp_path, fp.CLANK_ID, failed=failed)
-    result = consumer.combine(path, doc, row, registry)
+    result = consumer.combine(path, doc, row, registry, consumer.test_topology)
     emitted_registry = json.loads(path.with_name("adapter-registry.json").read_text(encoding="utf-8"))
-    assert path.with_name("four-source-manifest.json").read_bytes() == original_bytes
+    assert path.with_name("sqlite-source-manifest.json").read_bytes() == original_bytes
     assert doc == original_doc and registry == original_registry
     assert result["lanes"][:-1] == original_doc["lanes"]
     assert result["lanes"][-1] == row
@@ -176,19 +173,19 @@ def test_combine_rejects_unbounded_adapter_registry_without_replacing_manifest(c
         registry.pop("oem-radar")
     else:
         registry["board-clank"] = {"db": "forbidden.db"}
-    with pytest.raises(consumer.IntakeError, match="REGISTRY_SET_DRIFT"):
-        consumer.combine(path, doc, _row(consumer, tmp_path, fp.CLANK_ID), registry)
+    with pytest.raises(TopologyError, match="EXACT_REGISTRY_MAPPING_DRIFT"):
+        consumer.combine(path, doc, _row(consumer, tmp_path, fp.CLANK_ID), registry, consumer.test_topology)
     assert path.read_bytes() == before
-    assert not path.with_name("four-source-manifest.json").exists()
+    assert not path.with_name("sqlite-source-manifest.json").exists()
 
 
 def test_combine_never_overwrites_previous_four_source_evidence(consumer, tmp_path):
     path, doc = _four_manifest(consumer, tmp_path)
-    previous = path.with_name("four-source-manifest.json")
+    previous = path.with_name("sqlite-source-manifest.json")
     previous.write_bytes(b"preserved earlier evidence")
     before = path.read_bytes()
-    with pytest.raises(consumer.IntakeError, match="FOUR_EVIDENCE_EXISTS"):
-        consumer.combine(path, doc, _row(consumer, tmp_path, fp.CLANK_ID), _registry(consumer))
+    with pytest.raises(consumer.IntakeError, match="SQLITE_EVIDENCE_EXISTS"):
+        consumer.combine(path, doc, _row(consumer, tmp_path, fp.CLANK_ID), _registry(consumer), consumer.test_topology)
     assert path.read_bytes() == before
     assert previous.read_bytes() == b"preserved earlier evidence"
 
@@ -208,24 +205,24 @@ def _failed_receipt():
 
 def _main_case(module, tmp_path, monkeypatch, receipt=None):
     receipt = receipt or _failed_receipt()
-    files = {name: tmp_path / (name + ".json") for name in ("spec", "receipt", "context", "registry")}
+    files = {name: tmp_path / (name + ".json") for name in ("spec", "receipt", "context", "registry", "inventory")}
     values = {"spec": _spec(module), "receipt": receipt, "registry": _registry(module)}
+    values["inventory"] = copy.deepcopy(module.test_inventory)
     files["receipt"].write_text(json.dumps(receipt), encoding="utf-8")
     values["context"] = {"request_id": receipt["request_id"], "request_started_at": receipt["request_started_at"],
                          "prior_attempt_id": "export-20260930T131948Z-d39b9e696dd74b76",
                          "receipt_sha256": hashlib.sha256(files["receipt"].read_bytes()).hexdigest()}
-    monkeypatch.setattr(module, "runtime_boundary", lambda p: None)
+    monkeypatch.setattr(module, "runtime_boundary", lambda p, sources: None)
     monkeypatch.setattr(module, "read_ro_json", lambda p: copy.deepcopy(values[next(k for k, v in files.items() if v == p)]))
     argv = ["--spec", str(files["spec"]), "--receipt", str(files["receipt"]),
             "--request-context", str(files["context"]), "--registry", str(files["registry"]),
-            "--output-root", str(tmp_path), "--image-id", IMAGE_ID]
+            "--output-root", str(tmp_path), "--image-id", IMAGE_ID, "--inventory", str(files["inventory"])]
     return values, files, argv
 
 
 def test_main_failure_uses_real_typed_translation_then_continues_four_source_produce(consumer, tmp_path, monkeypatch, capsys):
     values, _, argv = _main_case(consumer, tmp_path, monkeypatch)
     # Metadata-only fixture path semantics; production executes strictly Linux.
-    monkeypatch.setattr(fp, "CANONICAL_SOURCE_PATH", str(tmp_path / "canonical-not-mounted.db"))
     calls = []
     def produce(spec, output):
         calls.append((copy.deepcopy(spec), output))
@@ -236,7 +233,7 @@ def test_main_failure_uses_real_typed_translation_then_continues_four_source_pro
     out = capsys.readouterr()
     assert calls == [(values["spec"], tmp_path)]
     summary = json.loads(out.out)
-    assert summary["status"] == "FIVE_CHILD_MANIFEST_READY" and summary["lanes"] == 5
+    assert summary["status"] == "GOVERNED_CHILD_MANIFEST_READY" and summary["lanes"] == 5
     assert summary["feature_phone_refresh_outcome"] == "FAILED"
     assert summary["feature_phone_execution_freshness"] == "UNKNOWN"
     failed = load_manifest(Path(summary["manifest"]))["lanes"][-1]
@@ -396,7 +393,7 @@ def _boundary(consumer, monkeypatch, *, extra_mounts=(), omitted_roots=(), uid=1
 
 def test_boundary_requires_exact_nonroot_ro_sources_caps_nnp_and_rw_isolated_output(consumer, monkeypatch, capsys):
     output = _boundary(consumer, monkeypatch)
-    consumer.runtime_boundary(output)
+    consumer.runtime_boundary(output, consumer.SOURCES)
     assert "canonical_ro_sources=4 feature_phone_canonical_mount=false" in capsys.readouterr().err
 
 
@@ -411,22 +408,22 @@ def test_boundary_requires_exact_nonroot_ro_sources_caps_nnp_and_rw_isolated_out
     ({"extra_mounts": ("/export",)}, "FORBIDDEN_FEATURE_PHONE_OR_COMMAND_MOUNT"),
     ({"extra_mounts": ("/aliased/feature-phone-clank/observer-export/staging",)}, "PRIVATE_EXPORT_MOUNT_FORBIDDEN"),
     ({"extra_mounts": ("/aliased/feature-phone-clank/observer-export/failed",)}, "PRIVATE_EXPORT_MOUNT_FORBIDDEN"),
-    ({"omitted_roots": ("/volume2/clank/oem-radar/canonical-cops-000072/state",)}, "EXACT_FOUR_SOURCE_MOUNTS_REQUIRED"),
+    ({"omitted_roots": ("/volume2/clank/oem-radar/canonical-cops-000072/state",)}, "EXACT_SOURCE_MOUNTS_REQUIRED"),
     ({"capabilities": 1}, "EFFECTIVE_CAPABILITIES_PRESENT"),
     ({"nnp": 0}, "NO_NEW_PRIVILEGES_REQUIRED"),
     ({"writable": ("/",)}, "CONTAINER_ROOT_NOT_RO"),
-    ({"writable": ("/volume2/clank/chinese-tech-wire/state",)}, "FOUR_SOURCE_NOT_KERNEL_RO"),
-    ({"symlinks": ("/volume2/clank/korean-tech-wire/state/korean_tech_wire.db",)}, "UNSAFE_FOUR_SOURCE"),
+    ({"writable": ("/volume2/clank/chinese-tech-wire/state",)}, "SOURCE_NOT_KERNEL_RO"),
+    ({"symlinks": ("/volume2/clank/korean-tech-wire/state/korean_tech_wire.db",)}, "UNSAFE_SOURCE"),
     ({"sidecars": ("/volume2/clank/korean-tech-wire/state/korean_tech_wire.db-wal",),
-      "writable": ("/volume2/clank/korean-tech-wire/state/korean_tech_wire.db-wal",)}, "FOUR_SOURCE_SIDECAR_NOT_KERNEL_RO"),
-    ({"symlinks": ("/volume2/clank/korean-tech-wire/state/korean_tech_wire.db-shm",)}, "FOUR_SOURCE_SIDECAR_SYMLINK"),
+      "writable": ("/volume2/clank/korean-tech-wire/state/korean_tech_wire.db-wal",)}, "SOURCE_SIDECAR_NOT_KERNEL_RO"),
+    ({"symlinks": ("/volume2/clank/korean-tech-wire/state/korean_tech_wire.db-shm",)}, "SOURCE_SIDECAR_SYMLINK"),
     ({"output_ro": True}, "UNSAFE_OUTPUT_ROOT"),
     ({"symlinks": ("/app/output",)}, "UNSAFE_OUTPUT_ROOT"),
 ])
 def test_boundary_negative_cases_reject_without_any_source_sql(consumer, monkeypatch, kwargs, code):
     output = _boundary(consumer, monkeypatch, **kwargs)
     with pytest.raises(consumer.IntakeError, match=code):
-        consumer.runtime_boundary(output)
+        consumer.runtime_boundary(output, consumer.SOURCES)
 
 
 def test_failed_export_full_isolated_pipeline_keeps_four_children_and_ktw_qc(consumer, tmp_path, monkeypatch, capsys):
@@ -451,7 +448,6 @@ def test_failed_export_full_isolated_pipeline_keeps_four_children_and_ktw_qc(con
         registry[clank_id].update(db="copy.db", expected_schema_version=row["schema_version"])
     doc = {"snapshot_contract_version": "1.0", "observed_at": _iso(datetime.now(UTC)), "lanes": rows}
     manifest.write_text(json.dumps(doc), encoding="utf-8")
-    monkeypatch.setattr(fp, "CANONICAL_SOURCE_PATH", str(tmp_path / "feature-phone-canonical-not-mounted.db"))
     receipt = _failed_receipt()
     failure = fp.translate_failure(
         receipt, request_id=receipt["request_id"], request_started_at=receipt["request_started_at"],
@@ -459,7 +455,13 @@ def test_failed_export_full_isolated_pipeline_keeps_four_children_and_ktw_qc(con
         adapter_artifact_sha256=IMAGE_ID, adapter_package_version="0.0.1.dev0",
         prior_attempt_id="export-20260930T131948Z-d39b9e696dd74b76",
         last_good_snapshot_ref=receipt["last_good_snapshot_ref"])
-    consumer.combine(manifest, doc, failure, registry)
+    # This legacy pipeline fixture intentionally shares one synthetic SQLite
+    # file between adapters. Build its manifest directly: the production
+    # topology tests separately require distinct governed store identities.
+    doc["lanes"].append(failure)
+    manifest.write_text(json.dumps(doc), encoding="utf-8")
+    registry[fp.CLANK_ID]["db"] = "/app/feature-phone-accepted/unavailable/feature_phone_clank.db"
+    manifest.with_name("adapter-registry.json").write_text(json.dumps(registry), encoding="utf-8")
     registry_path = manifest.with_name("adapter-registry.json")
     entries = json.loads(registry_path.read_text(encoding="utf-8"))
     entries.pop("extend_builtin")

@@ -1,0 +1,54 @@
+# COPS-000081 sealed-export isolated candidate; never the production inventory.
+# Canonical paths below are provenance, not consumer mount authorization.
+# Compiled from prior NAS cutover evidence and 29 September owner censuses;
+# deployed revisions require revalidation before isolated NAS staging.
+# Snapshot spec pins the isolated QC-capable image digest; verify it and the
+# child deployment revisions again before any staged proof or task-14 promotion.
+schema_version: '2.0'
+as_of: '2026-09-29T13:52:23Z'
+inventory_status: INVENTORY_INCOMPLETE
+authority:
+  status: ISOLATED_NAS_OBSERVER_CANDIDATE_ONLY
+  note: No child writer, live Diagnostic, Board, or scheduled task authority changes.
+promotion_policy:
+  frozen: true
+  reason: Five-child observer candidate is not complete fleet or Board admission.
+deployments:
+  - repository: chinese-tech-wire
+    instance_id: ctw-nas-canonical
+    location_type: NAS
+    deployment_state: RUNNING
+    deployed_commit_sha: cfbd3158a5272aab6e67a2a9005be2c3a45544e6
+    database_path: /volume2/clank/chinese-tech-wire/state/ctw.db
+  - repository: korean-tech-wire
+    instance_id: ktw-nas-canonical
+    location_type: NAS
+    deployment_state: RUNNING
+    deployed_commit_sha: c80a69697ac94d4069c818e015f6c5f10bdb5986
+    database_path: /volume2/clank/korean-tech-wire/state/korean_tech_wire.db
+  - repository: semiconductor-intelligence
+    instance_id: si-nas-experimental-tier-b
+    location_type: NAS
+    deployment_state: EXPERIMENTAL
+    deployed_commit_sha: 53cb3f1f5358ad28a2d92ebd78efeab9534ddfa1
+    database_path: /volume2/clank/semiconductor-intelligence/state/semi_intel.db
+  - repository: feature-phone-clank
+    instance_id: feature-phone-clank-nas-cops-000072
+    location_type: NAS
+    deployment_state: EXPERIMENTAL
+    deployed_commit_sha: 3e6e19a2d5b7cb5004aab12145d099521a200c25
+    database_path: /volume2/clank/feature-phone-clank/state/feature_phone_clank.db
+  - repository: oem-radar
+    instance_id: oem-nas-canonical
+    location_type: NAS
+    deployment_state: RUNNING
+    deployed_commit_sha: e93477d0266d014f1a705dcce12a9218c2d14488
+    database_path: /volume2/clank/oem-radar/canonical-cops-000072/state/radar.db
+unobserved_from_this_isolated_candidate:
+  - watch-clank
+  - smartphone-clank
+  - smartwatch-clank
+  - free-game-tracker
+  - tablet-clank
+board_admission: BLOCKED_SEPARATE_COPS-000074
+
