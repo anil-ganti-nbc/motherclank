@@ -81,3 +81,74 @@ def test_env_variable_selects_registry(tmp_path, monkeypatch):
     env_file.write_text(json.dumps({"extend_builtin": False}), encoding="utf-8")
     monkeypatch.setenv("MOTHERCLANK_ADAPTER_REGISTRY", str(env_file))
     assert adapters.load_registry(None) == {}
+
+
+def _row(**overrides):
+    return {"module": "fixture.adapter", "class": "Adapter", "db": "copy.db",
+            "instance_id": "nas-shadow", "lane_id": "experimental", **overrides}
+
+
+@pytest.mark.parametrize("field", ["instance_id", "lane_id"])
+@pytest.mark.parametrize("value", ["", " ", "../state", "two words", "UPPER", 7])
+def test_invalid_snapshot_identity_rejected_before_adapter_import(tmp_path, field, value):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"extend_builtin": False,
+                                   "test-clank": _row(**{field: value})}), encoding="utf-8")
+    with pytest.raises(adapters.AdapterPlaneUnavailable, match=field):
+        adapters.load_registry(registry)
+
+
+@pytest.mark.parametrize("cid", ["", "../child", "test clank", "UPPER"])
+def test_invalid_child_identity_rejected(tmp_path, cid):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"extend_builtin": False, cid: _row()}), encoding="utf-8")
+    with pytest.raises(adapters.AdapterPlaneUnavailable, match="invalid registry row"):
+        adapters.load_registry(registry)
+
+
+@pytest.mark.parametrize("text", [
+    '{"extend_builtin":false,"test-clank":{},"test-clank":{}}',
+    '{"extend_builtin":false,"test-clank":{"db":"first.db","db":"second.db"}}',
+    "extend_builtin: false\ntest-clank: {}\ntest-clank: {}\n",
+    "extend_builtin: false\ntest-clank:\n  db: first.db\n  db: second.db\n",
+])
+def test_duplicate_json_or_yaml_keys_never_silently_replace_identity(tmp_path, text):
+    registry = tmp_path / "registry.txt"
+    registry.write_text(text, encoding="utf-8")
+    with pytest.raises(adapters.AdapterPlaneUnavailable, match="duplicate adapter registry key"):
+        adapters.load_registry(registry)
+
+
+def test_relative_store_alias_is_duplicate(tmp_path):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"extend_builtin": False,
+                                   "one": _row(), "two": _row(db="./copy.db")}), encoding="utf-8")
+    with pytest.raises(adapters.AdapterPlaneUnavailable, match="duplicate store identity"):
+        adapters.load_registry(registry)
+
+
+def test_absolute_relative_store_collision_rejected_before_instantiation(tmp_path, monkeypatch):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"extend_builtin": False,
+                                   "one": _row(),
+                                   "two": _row(db=str(tmp_path / "copy.db"))}), encoding="utf-8")
+    monkeypatch.setattr(adapters, "ensure_adapter_plane", lambda *args: None)
+    # The fixture module does not exist: collision must be caught before any
+    # imports or constructors, not after one adapter already read its input.
+    with pytest.raises(adapters.AdapterPlaneUnavailable, match="duplicate store identity"):
+        adapters.build_adapters(tmp_path, registry_path=registry)
+
+
+def test_absolute_feature_phone_accepted_path_still_supported(tmp_path):
+    accepted = "/app/fp-accepted/export-20261002T061502Z-716e3870f39d42ed/snapshot.db"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"extend_builtin": False,
+                                   "feature-phone-clank": _row(db=accepted)}), encoding="utf-8")
+    assert adapters.load_registry(registry)["feature-phone-clank"]["db"] == accepted
+
+
+def test_false_string_cannot_silently_enable_builtin_registry(tmp_path):
+    registry = tmp_path / "registry.json"
+    registry.write_text('{"extend_builtin":"false"}', encoding="utf-8")
+    with pytest.raises(adapters.AdapterPlaneUnavailable, match="must be boolean"):
+        adapters.load_registry(registry)

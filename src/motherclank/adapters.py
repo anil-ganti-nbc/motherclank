@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -126,6 +127,18 @@ class AdapterPlaneUnavailable(RuntimeError):
     pass
 
 
+_LANE_IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _unique_mapping(pairs: list[tuple[Any, Any]]) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key, value in pairs:
+        if key in mapping:
+            raise AdapterPlaneUnavailable(f"duplicate adapter registry key: {key!r}")
+        mapping[key] = value
+    return mapping
+
+
 def _candidate_roots(explicit: Path | None) -> list[Path]:
     roots: list[Path] = []
     if explicit:
@@ -173,21 +186,35 @@ def load_registry(registry_path: Path | str | None = None, *,
     raw = Path(path).read_bytes()
     text = raw.decode("utf-8")
     try:
-        doc = json.loads(text)
+        doc = json.loads(text, object_pairs_hook=_unique_mapping)
     except json.JSONDecodeError:
         import yaml  # optional dependency, consistent with inventory loading
-        doc = yaml.safe_load(text)
+
+        class UniqueRegistryLoader(yaml.SafeLoader):
+            pass
+
+        def construct_mapping(loader, node):
+            loader.flatten_mapping(node)
+            return _unique_mapping(loader.construct_pairs(node))
+
+        UniqueRegistryLoader.add_constructor(
+            yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
+        doc = yaml.load(text, Loader=UniqueRegistryLoader)
     if not isinstance(doc, dict):
         raise AdapterPlaneUnavailable(f"adapter registry must be a mapping: {path}")
-    extend = bool(doc.pop("extend_builtin", True))
+    extend = doc.pop("extend_builtin", True)
+    if not isinstance(extend, bool):
+        raise AdapterPlaneUnavailable("extend_builtin must be boolean")
     if not extend:
         registry.clear()
     seen_stores: dict[str, str] = {}
     for cid, entry in doc.items():
-        if not isinstance(cid, str) or not isinstance(entry, dict):
+        if (not isinstance(cid, str) or not _LANE_IDENTIFIER.fullmatch(cid)
+                or not isinstance(entry, dict)):
             raise AdapterPlaneUnavailable(f"invalid registry row: {cid!r}")
         for field in ("module", "class", "db"):
-            if not entry.get(field):
+            if (not isinstance(entry.get(field), str)
+                    or not entry[field].strip() or "\0" in entry[field]):
                 raise AdapterPlaneUnavailable(
                     f"registry row {cid!r} missing required field {field!r}")
         # Snapshot-v1 intake binds a copy to an operator-declared child
@@ -196,9 +223,10 @@ def load_registry(registry_path: Path | str | None = None, *,
         identity_fields = ("instance_id", "lane_id")
         if any(field in entry for field in identity_fields):
             for field in identity_fields:
-                if not isinstance(entry.get(field), str) or not entry[field].strip():
+                if (not isinstance(entry.get(field), str)
+                        or not _LANE_IDENTIFIER.fullmatch(entry[field])):
                     raise AdapterPlaneUnavailable(
-                        f"registry row {cid!r} needs nonempty {field!r} "
+                        f"registry row {cid!r} needs a valid {field!r} "
                         "when snapshot identity is configured")
         registry[str(cid)] = {
             "module": entry["module"],
@@ -220,7 +248,7 @@ def load_registry(registry_path: Path | str | None = None, *,
     # pointing at one DB file would silently cross-contaminate evidence.
     seen_stores: dict[str, str] = {}
     for cid, entry in registry.items():
-        db_key = str(entry["db"])
+        db_key = os.path.normcase(os.path.normpath(entry["db"]))
         if db_key in seen_stores:
             raise AdapterPlaneUnavailable(
                 f"duplicate store identity: {db_key} claimed by both "
@@ -245,6 +273,14 @@ def build_adapters(real_state_dir: Path,
     if not registry:
         raise AdapterPlaneUnavailable("effective adapter registry is empty")
     d = real_state_dir
+    resolved_stores: dict[Path, str] = {}
+    for cid, entry in registry.items():
+        resolved = (d / entry["db"]).resolve()
+        if resolved in resolved_stores:
+            raise AdapterPlaneUnavailable(
+                f"duplicate store identity: {cid!r} and "
+                f"{resolved_stores[resolved]!r} resolve to the same DB")
+        resolved_stores[resolved] = cid
     adapters: dict[str, Any] = {}
     expected_identities: dict[str, dict[str, str]] = {}
     expected_schema_versions: dict[str, str] = {}

@@ -292,6 +292,9 @@ def test_failed_feature_phone_fleet_harvest_is_unknown_other_four_continue(tmp_p
     built["expected_identities"][fp.CLANK_ID] = dict(instance_id=fp.INSTANCE_ID,lane_id=fp.LANE_ID)
     manifest.write_text(json.dumps(dict(snapshot_contract_version="1.0", observed_at=OBSERVED,lanes=rows)),encoding="utf-8")
     payload,warnings=_build(tmp_path,manifest,inventory,built)
+    # Keep synthesis recency on the same fixture clock as manifest intake.
+    # Otherwise this test changes verdict once the real date passes Sep 30.
+    payload["harvested_at_utc"] = NOW.isoformat()
     assert not warnings and fp_adapter.calls==0
     assert payload["clanks"][fp.CLANK_ID]["observation"]=="SNAPSHOT_REFRESH_FAILED"
     assert payload["clanks"][fp.CLANK_ID]["snapshot_provenance"]["last_good_snapshot_ref"]=="d"*64

@@ -67,12 +67,59 @@ _OPTIONAL_EXTENSIONS: dict[str, dict[str, str]] = {}
 
 
 def register_optional_extension(name: str, *, since: str,
-                                description: str) -> None:
+                                description: str,
+                                requires: str | None = None) -> None:
     _OPTIONAL_EXTENSIONS[name] = {"since": since, "description": description}
+    if requires is not None:
+        _OPTIONAL_EXTENSIONS[name]["requires"] = requires
 
 
 def optional_extension_names() -> tuple[str, ...]:
     return tuple(sorted(_OPTIONAL_EXTENSIONS))
+
+
+def optional_extension_dispatch_names() -> tuple[str, ...]:
+    # Dependencies precede their dependents, with deterministic lexical order
+    # otherwise. Existing extensions keep their relative invocation order.
+    ordered: list[str] = []
+
+    def add(name: str, visiting: frozenset[str] = frozenset()) -> None:
+        if name in ordered:
+            return
+        if name in visiting:
+            raise ValueError("optional extension dependency cycle")
+        dependency = _OPTIONAL_EXTENSIONS[name].get("requires")
+        if dependency is not None:
+            add(dependency, visiting | {name})
+        ordered.append(name)
+
+    for name in optional_extension_names():
+        add(name)
+    return tuple(ordered)
+
+
+def optional_extension_dependency(name: str) -> str | None:
+    return _OPTIONAL_EXTENSIONS[name].get("requires")
+
+
+def validate_optional_extension(name: str, value: Any) -> list[str]:
+    """Validate transport shape, never reinterpret child domain evidence.
+
+    The versioned observer_evidence envelope opts a producer into native
+    source/diagnostic summary transport. Older adapters with similarly named
+    methods keep their existing harvest behavior until explicitly qualified.
+    """
+    if name == "observer_evidence":
+        if not isinstance(value, dict):
+            return ["observer_evidence: mapping required"]
+        if value.get("payload_version") != "1.0":
+            return ["observer_evidence: unsupported payload_version (expected 1.0)"]
+    elif name == "source_summary":
+        if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+            return ["source_summary: list of mappings required"]
+    elif name == "diagnostic_summary" and not isinstance(value, dict):
+        return ["diagnostic_summary: mapping required"]
+    return []
 
 
 def is_declared_extension(name: str) -> bool:
@@ -106,6 +153,13 @@ def _seed_extensions() -> None:
     ]
     for name, since, desc in seed:
         register_optional_extension(name, since=since, description=desc)
+    register_optional_extension(
+        "observer_evidence", since="0.2",
+        description="versioned native observer evidence envelope (payload 1.0)")
+    for name in ("source_summary", "diagnostic_summary"):
+        register_optional_extension(
+            name, since="0.2", requires="observer_evidence",
+            description="verbatim native summary; requires qualified observer evidence 1.0")
 
 
 _seed_extensions()
@@ -146,13 +200,10 @@ def surface_report(adapter: Any) -> dict[str, Any]:
     """Introspection helper for the adapter-surface audit matrix: which
     required methods exist, plus the optional extension names discovered
     on the instance."""
-    optional = [name for name in (
-        "event_summary", "delivery_summary", "qc_summary", "qc_records",
-        "qc_summary", "source_lifecycle", "timeline_taxonomy",
-        "schema_revision", "current_epoch", "execution_evidence",
-        "generation_summary", "recent_runs", "store_inventory",
-        "eligible_count", "telemetry", "source_summary")
-        if callable(getattr(adapter, name, None))]
+    optional = [name for name in optional_extension_names()
+                if callable(getattr(adapter, name, None))
+                and (optional_extension_dependency(name) is None
+                     or callable(getattr(adapter, optional_extension_dependency(name), None)))]
     return {
         "spec_version": OBSERVER_SURFACE_SPEC_VERSION,
         "required_present": sorted(

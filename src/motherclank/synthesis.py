@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,18 @@ def synthesize_clank(clank_id: str, block: dict[str, Any],
                     "intake_child_execution_freshness",
                     "effective_freshness_state", "intake_reasons")
             }
+        # These are adapter-owned evidence, not new Motherclank health or
+        # novelty claims. Retain them even when stale execution or an adapter
+        # failure makes the derived state UNKNOWN. The enclosing state and
+        # snapshot provenance continue to qualify their currency.
+        retained = [name for name in (
+            "source_summary", "diagnostic_summary", "observer_evidence")
+            if name in block]
+        for name in retained:
+            result[name] = deepcopy(block[name])
+        if retained:
+            provenance["observer_extension_fields"] = [
+                f"clanks.{clank_id}.{name}" for name in retained]
         return result
 
     def note(path: str) -> None:

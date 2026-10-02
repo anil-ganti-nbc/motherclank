@@ -84,17 +84,35 @@ def observe_clank(adapter: Any) -> dict[str, Any]:
 
     # Contract v0.3.1: optional extension dispatch is REGISTRY-DRIVEN.
     # Extensions are declared via ``contract.register_optional_extension``
-    # and invoked in sorted order for deterministic output. Undeclared
+    # and invoked in deterministic dependency order. Undeclared
     # adapter methods are NEVER invoked; a raising or malformed extension
     # is isolated to its own key without poisoning sibling extensions.
-    from .contract import optional_extension_names
-    for extra in sorted(optional_extension_names()):
+    from .contract import (optional_extension_dependency,
+                           optional_extension_dispatch_names,
+                           validate_optional_extension)
+    for extra in optional_extension_dispatch_names():
         if not hasattr(adapter, extra):
             continue
+        dependency = optional_extension_dependency(extra)
+        if dependency is not None:
+            prerequisite = block.get(dependency)
+            if (dependency not in block
+                    or validate_optional_extension(dependency, prerequisite)
+                    or isinstance(prerequisite, dict)
+                    and prerequisite.get("observation") == "FAILED_ADAPTER"):
+                continue
         try:
             value = _deep(getattr(adapter, extra)())
         except Exception as exc:
             block[extra] = {"observation": "FAILED_ADAPTER", "error": f"{type(exc).__name__}: {exc}"}
+            continue
+        extension_violations = validate_optional_extension(extra, value)
+        if extension_violations:
+            block[extra] = {
+                "observation": "FAILED_ADAPTER",
+                "error": "invalid optional extension payload",
+                "contract_violations": extension_violations,
+            }
             continue
         block[extra] = value
         # Capability vocabulary is part of the required v0.2 surface. A
