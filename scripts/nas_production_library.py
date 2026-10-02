@@ -567,7 +567,45 @@ def record_hash(value, excluded=(), compact=True):
     return 'sha256:' + hashlib.sha256(json.dumps(body, **kwargs).encode('utf-8')).hexdigest()
 
 
-def validate_fresh_pipeline(records, manifest_sha, registry_sha, inventory_sha, expected_fp, started):
+def feature_phone_copy_proof(block, row, expected_fp):
+    """Corroborate current intake against the already hash-verified manifest.
+
+    SUCCESS is historical publication outcome, not current copy freshness.
+    Consumer/preflight still validate sealed payload, integrity and lineage.
+    Never manufacture a DB proof for a copy the reader correctly skipped.
+    """
+    provenance = block.get('snapshot_provenance', {})
+    fields = ('clank_id', 'instance_id', 'lane_id', 'snapshot_created_at',
+              'snapshot_path', 'snapshot_sha256', 'child_as_of', 'freshness_horizon',
+              'freshness_state', 'refresh_outcome', 'child_export',
+              'adapter_package_sha', 'adapter_artifact_sha256')
+    require(all(k in row and provenance.get(k) == row[k] for k in fields)
+            and row['clank_id'] == FP and row['refresh_outcome'] == expected_fp,
+            'FP_MANIFEST_PROVENANCE_DRIFT')
+    if expected_fp == 'FAILED':
+        return 'INVALID_OR_UNAVAILABLE'
+    horizon = row['freshness_horizon']
+    require(type(horizon) is dict and type(horizon.get('max_age_seconds')) is int
+            and horizon['max_age_seconds'] == 36000, 'FP_FRESHNESS_POLICY_DRIFT')
+    observed = utc(provenance.get('intake_observed_at'))
+    age = (observed - utc(row['snapshot_created_at'])).total_seconds()
+    # Preserve snapshot-v1's existing five-minute intake clock-skew allowance.
+    require(age >= -300 and (observed - utc(row['observed_at'])).total_seconds() >= -300,
+            'FP_FUTURE_COPY_OR_OBSERVATION')
+    require(row['freshness_state'] in ('FRESH', 'STALE'), 'FP_COPY_STATE_INVALID')
+    state = 'STALE' if age > 36000 or row['freshness_state'] == 'STALE' else 'FRESH'
+    require(provenance.get('intake_freshness_state') == state, 'FP_INTAKE_CLOCK_DRIFT')
+    if state == 'STALE':
+        require(block.get('observation') == 'SNAPSHOT_STALE'
+                and provenance.get('effective_freshness_state') == 'STALE',
+                'FP_STALE_COPY_PROMOTED')
+        return 'VALID_BUT_STALE'
+    require(block.get('observation') in (None, 'CHILD_EXECUTION_STALE', 'CHILD_EXECUTION_UNKNOWN'),
+            'FP_FRESH_COPY_REJECTED')
+    return 'VALID_AND_FRESH'
+
+
+def validate_fresh_pipeline(records, manifest_sha, registry_sha, inventory_sha, expected_fp, started, manifest):
     require(set(records) == set(APPEND_DIRS), 'FULL_FRESH_PHASE_RECORDS_REQUIRED')
     require(expected_fp in ('SUCCESS', 'FAILED') and all(type(x) is str and SHA.fullmatch(x)
             for x in (manifest_sha, registry_sha, inventory_sha)), 'FRESH_PROOF_INPUT_PIN_INVALID')
@@ -590,7 +628,10 @@ def validate_fresh_pipeline(records, manifest_sha, registry_sha, inventory_sha, 
             and m0.get('inventory_sha256') == 'sha256:' + inventory_sha, 'FRESH_M0_PROVENANCE_DRIFT')
     require(set(m0.get('clanks', {})) == LANES, 'FRESH_M0_LANE_SCOPE_DRIFT')
     zero = m0.get('read_only_proof_total_changes')
-    expected_db = {v[2] for v in SQLITE_SOURCES.values()} | ({'feature_phone_clank.db'} if expected_fp == 'SUCCESS' else set())
+    fp_rows = [r for r in manifest['lanes'] if r.get('clank_id') == FP]
+    require(len(fp_rows) == 1, 'ONE_FP_MANIFEST_RECORD_REQUIRED')
+    fp_validity = feature_phone_copy_proof(m0['clanks'][FP], fp_rows[0], expected_fp)
+    expected_db = {v[2] for v in SQLITE_SOURCES.values()} | ({'feature_phone_clank.db'} if fp_validity == 'VALID_AND_FRESH' else set())
     require(type(zero) is dict and set(zero) == expected_db
             and all(type(x) is int and x == 0 for x in zero.values()), 'READONLY_DB_CORROBORATION_FAILED')
     for cid in ('chinese-tech-wire', 'semiconductor-intelligence'):
@@ -636,6 +677,7 @@ def validate_fresh_pipeline(records, manifest_sha, registry_sha, inventory_sha, 
     require(soak.get('window', {}).get('latest') == stamp and not soak.get('qc_surface_failures'),
             'SOAK_CURRENT_QC_OR_SURFACE_FAILED')
     return {'status': 'FRESH_COMPLETE_PIPELINE_LINKS_PASS', 'expected_feature_phone': expected_fp,
+            'feature_phone_copy_verification': fp_validity,
             'current_m0': m0.get('content_hash'), 'current_m1': m1.get('content_hash'),
             'current_m2': m2.get('batch_hash'), 'current_m3': m3.get('batch_hash'),
             'current_qc': qc.get('qc_batch_hash'), 'current_soak': soak.get('report_hash'),
@@ -691,7 +733,9 @@ def complete_pipeline(label, real_state, var, accepted, results, nonce):
         if accepted is not None:
             require(tree_hashes(accepted) == accepted_before, 'ACCEPTED_INPUT_CHANGED_DURING_PIPELINE')
     fresh = appended_records(before, append_state(var))
-    proof = validate_fresh_pipeline(fresh, manifest_sha, registry_sha, FILE_PINS[INVENTORY], expected_fp, started)
+    require(digest(real_state / 'manifest.json') == manifest_sha, 'FINAL_MANIFEST_HASH_DRIFT')
+    proof = validate_fresh_pipeline(fresh, manifest_sha, registry_sha, FILE_PINS[INVENTORY], expected_fp, started,
+                                    read_json(real_state / 'manifest.json'))
     proof.update(phases=phase_results, input_hashes=inputs,
                  accepted_export_hashes=accepted_before, accepted_mount=accepted is not None,
                  image=IMAGE, source_revision=SOURCE_SHA, adapter_revision=ADAPTER_SHA)

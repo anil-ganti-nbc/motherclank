@@ -61,3 +61,16 @@ export-request path. Scheduled origin is never established merely by selecting
 
 Board collector, promotion, delivery and canonical-state mutation remain outside
 this observer package's authority.
+
+## Accepted publication versus current read-only proof
+
+Feature Phone's historical export `SUCCESS` is not a current freshness claim.
+The host corroborator binds M0 provenance to the hash-pinned manifest and checks
+the copy clock at M0 intake. A validated copy at or below the existing 36000-second
+limit is `VALID_AND_FRESH` and requires its zero-change DB proof. Beyond that
+limit it is `VALID_BUT_STALE`: `SNAPSHOT_STALE` and effective `STALE` are required,
+and a current DB-proof entry must be absent because the reader skipped the copy.
+Native-child staleness alone does not imply the copy was skipped. M1 remains
+`UNKNOWN` for non-current evidence. Sealed publication/hash/lineage validation
+still runs before the pipeline; this distinction never refreshes evidence or
+turns malformed publication data into an accepted stale result.
